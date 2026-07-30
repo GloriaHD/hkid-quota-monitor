@@ -16,7 +16,7 @@ def _patch(seq):
     """让 _fetch_once 依次返回 seq 中的响应（异常则抛出）。"""
     it = iter(seq)
 
-    def fake():
+    def fake(*_a, **_kw):   # 补采会传 timeout/retries，签名要能吃掉
         v = next(it)
         if isinstance(v, Exception):
             raise v

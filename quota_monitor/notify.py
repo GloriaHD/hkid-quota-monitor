@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import copy
+import html
 import json
 import os
 import re
@@ -23,6 +25,8 @@ from email.header import Header
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from pathlib import Path
+
+from .util import mask_email
 
 HKT = timezone(timedelta(hours=8))
 DATA = Path("data")
@@ -72,17 +76,31 @@ def _now() -> datetime:
 
 
 def load_state() -> dict:
-    if STATE_PATH.exists():
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    """读通知冷却状态。这个文件会被并发轮次提交、也可能被人工编辑——
+    坏了一律回退空状态，绝不能让它炸掉整条通知链路（回退代价只是
+    重发一轮提醒，比连续几天静默不发轻得多）。"""
+    try:
+        state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        if isinstance(state, dict) and isinstance(
+                state.get("cell_last_notified"), dict):
+            return state
+        print("WARN notify_state 结构异常，按空状态处理")
+    except FileNotFoundError:
+        pass
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN notify_state 读取失败({e})，按空状态处理")
     return {"cell_last_notified": {}}
 
 
 def prune_state(state: dict, today: str | None = None) -> None:
-    """剪掉已过期日期的冷却键，防止 state 文件无界增长。"""
+    """剪掉已过期日期的冷却键，防止 state 文件无界增长。
+    顺带清掉键格式非法的脏数据（否则下游解析会炸）。"""
     today = today or _now().strftime("%Y-%m-%d")
     cells = state.get("cell_last_notified", {})
-    for key in [k for k in cells if k.split("|")[1] < today]:
-        del cells[key]
+    for key in list(cells):
+        parts = key.split("|")
+        if len(parts) != 3 or parts[1] < today:
+            del cells[key]
 
 
 def filter_events(events: list[dict], state: dict,
@@ -97,7 +115,10 @@ def filter_events(events: list[dict], state: dict,
         key = f'{e["office"]}|{e["date"]}|{e["session"]}'
         last = cells.get(key)
         if last:
-            elapsed = (now - datetime.fromisoformat(last)).total_seconds() / 60
+            try:
+                elapsed = (now - datetime.fromisoformat(last)).total_seconds() / 60
+            except (TypeError, ValueError):
+                elapsed = float("inf")  # 时间戳坏了当作无冷却，宁可多提醒不可整轮崩
             if elapsed < cooldown_min:
                 continue
         cells[key] = now.isoformat(timespec="seconds")
@@ -133,7 +154,7 @@ def load_subscribers() -> list[dict]:
     try:
         from cryptography.fernet import Fernet
         raw = Fernet(key.encode()).decrypt(enc.read_bytes())
-        subs = json.loads(raw)
+        subs = json.loads(raw.decode().rstrip())  # 去掉 save_roster 的定长填充
         return [{"email": s["email"], "offices": s.get("offices"),
                  "before": s.get("before")}
                 for s in subs if s.get("email") and s.get("active", True)]
@@ -156,27 +177,32 @@ def compose(events: list[dict], cfg: dict) -> tuple[str, str]:
     lines = summarize(events)
     tiers = [tier_of(e["date"], cfg) for e in events]
     tier = "urgent" if "urgent" in tiers else "notice" if "notice" in tiers else "info"
-    n_top = tiers.count(tier)
+    # n_top = 落在该档阈值内的个数；n_all = 本批全部。两个数字含义不同，
+    # 凡是说「X 前有 N 个」的地方必须用 n_top，否则强提醒会报错数字
+    n_top, n_all = tiers.count(tier), len(events)
     subject = {
-        "urgent": f"🚨 紧急放号：{cfg.get('urgent_before', '近期')} 前有名额！（{n_top} 个）",
-        "notice": f"🔔 香港ID放号：{len(events)} 个名额（含 {cfg.get('notice_before', '近期')} 前）",
-        "info": f"🎫 香港ID预约放号：{len(events)} 个名额",
+        "urgent": f"🚨 紧急放号：{cfg.get('urgent_before', '近期')} 前有 {n_top} 个名额！",
+        "notice": f"🔔 香港ID放号：{cfg.get('notice_before', '近期')} 前有 {n_top} 个名额",
+        "info": f"🎫 香港ID预约放号：{n_all} 个名额",
     }[tier]
-    return subject, build_email_html(lines, len(events), tier, cfg)
+    return subject, build_email_html(lines, n_top, tier, cfg, n_all)
 
 
-def build_email_html(lines: list[str], n: int, tier: str = "info",
-                     cfg: dict | None = None) -> str:
-    items = "".join(f"<li style='margin:4px 0'>{ln}</li>" for ln in lines)
+def build_email_html(lines: list[str], n_top: int, tier: str = "info",
+                     cfg: dict | None = None, n_all: int | None = None) -> str:
+    """n_top=落在该提醒档内的名额数（标题用）；n_all=本批全部（副标题用）。"""
+    items = "".join(f"<li style='margin:4px 0'>{html.escape(ln)}</li>" for ln in lines)
     cfg = cfg or {}
+    n_all = n_top if n_all is None else n_all
+    extra = f"（本批共检出 {n_all} 个）" if n_all > n_top else ""
     if tier == "urgent":
-        head_color, head = "#d03b3b", (f"🚨 {cfg.get('urgent_before', '近期')} 前有名额！"
-                                       f"共 {n} 个放出，手慢无")
+        head_color, head = "#d03b3b", (f"🚨 {cfg.get('urgent_before', '近期')} 前有 "
+                                       f"{n_top} 个名额放出，手慢无{extra}")
     elif tier == "notice":
-        head_color, head = "#b8860b", (f"🔔 {cfg.get('notice_before', '近期')} 前有名额，"
-                                       f"共 {n} 个放出")
+        head_color, head = "#b8860b", (f"🔔 {cfg.get('notice_before', '近期')} 前有 "
+                                       f"{n_top} 个名额放出{extra}")
     else:
-        head_color, head = "#0b57d0", f"🎫 检测到 {n} 个预约名额放出"
+        head_color, head = "#0b57d0", f"🎫 检测到 {n_all} 个预约名额放出"
     return f"""<div style="font-family:system-ui,'PingFang SC','Microsoft YaHei';max-width:560px">
 <h2 style="color:{head_color};margin:0 0 6px">{head}</h2>
 <p style="color:#666;margin:0 0 12px">香港入境处智能身份证预约（检测时间 {_now().strftime('%m-%d %H:%M')} 港时）</p>
@@ -197,7 +223,7 @@ def send_emails(payloads: list[tuple[str, str, str]], dry: bool) -> None:
         return
     if dry or not user or not pwd:
         for rcpt, subject, _ in payloads:
-            print(f"[DRY] email -> {rcpt}: {subject}")
+            print(f"[DRY] email -> {mask_email(rcpt)}: {subject}")
         return
     sent = failed = 0
     with smtplib.SMTP("smtp.qq.com", 587, timeout=30) as s:
@@ -213,12 +239,12 @@ def send_emails(payloads: list[tuple[str, str, str]], dry: bool) -> None:
                 sent += 1
             except smtplib.SMTPException as e:
                 failed += 1
-                print(f"WARN send to {rcpt} failed: {e}")
+                print(f"WARN send to {mask_email(rcpt)} failed: {e}")
     print(f"email sent -> {sent} ok, {failed} failed")
 
 
 def send_feishu(lines: list[str], n: int, dry: bool, tier: str = "info",
-                cfg: dict | None = None) -> None:
+                cfg: dict | None = None, n_top: int | None = None) -> None:
     hook = os.environ.get("FEISHU_WEBHOOK", "")
     if not hook:
         print("skip feishu: no webhook")
@@ -227,12 +253,13 @@ def send_feishu(lines: list[str], n: int, dry: bool, tier: str = "info",
         print("skip feishu: webhook must be https")
         return
     cfg = cfg or {}
+    n_top = n if n_top is None else n_top
     if tier == "urgent":
         # @所有人需群机器人开启「允许 @ 所有人」，未开启时飞书按普通文本展示
         headline = (f'<at user_id="all">所有人</at> 🚨 '
-                    f"{cfg.get('urgent_before', '近期')} 前有名额！{n} 个放出，速抢")
+                    f"{cfg.get('urgent_before', '近期')} 前有 {n_top} 个名额放出，速抢")
     elif tier == "notice":
-        headline = f"🔔 {cfg.get('notice_before', '近期')} 前有名额，{n} 个放出"
+        headline = f"🔔 {cfg.get('notice_before', '近期')} 前有 {n_top} 个名额放出"
     else:
         headline = f"🎫 检测到 {n} 个香港ID预约名额放出"
     text = (headline + "\n" + "\n".join(lines) +
@@ -266,7 +293,10 @@ def main() -> None:
 
     n = len(fresh)
     # 冷却状态先落盘再发送：单通道抛异常时另一通道已发出的通知
-    # 不会因 state 丢失而在下一轮重复轰炸（宁可漏一轮，不可炸订阅者）
+    # 不会因 state 丢失而在下一轮重复轰炸（宁可漏一轮，不可炸订阅者）。
+    # 但「两个通道全失败」是另一回事——那批名额一个人都没通知到，
+    # 冷却却已烧掉，6 小时内不再提醒 = 彻底错过。故先留快照，全败时回滚。
+    state_before = copy.deepcopy(state)
     prune_state(state)
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=1),
                           encoding="utf-8")
@@ -291,16 +321,25 @@ def main() -> None:
     if skipped:
         print(f"personalized: {skipped} subscribers had no matching events")
 
-    full_subject_tier = [tier_of(e["date"], cfg) for e in fresh]
-    tier = ("urgent" if "urgent" in full_subject_tier
-            else "notice" if "notice" in full_subject_tier else "info")
+    all_tiers = [tier_of(e["date"], cfg) for e in fresh]
+    tier = ("urgent" if "urgent" in all_tiers
+            else "notice" if "notice" in all_tiers else "info")
+    tier_n = all_tiers.count(tier)
     # 飞书优先：webhook 约 1 秒送达，SMTP 群发要几十秒——抢名额时这段差距是决定性的
-    for send in (lambda: send_feishu(summarize(fresh), n, dry, tier, cfg),
+    ok = 0
+    for send in (lambda: send_feishu(summarize(fresh), n, dry, tier, cfg, tier_n),
                  lambda: send_emails(payloads, dry)):
         try:
             send()
+            ok += 1
         except Exception as e:  # noqa: BLE001 - 通道间互不拖累
             print(f"WARN notify channel failed: {e}")
+    if ok == 0:
+        # 一个人都没通知到 -> 回滚冷却，让下一轮重试，否则这批名额彻底错过
+        STATE_PATH.write_text(json.dumps(state_before, ensure_ascii=False, indent=1),
+                              encoding="utf-8")
+        print(f"WARN 所有通道均失败，已回滚冷却状态待下轮重试（{n} cells）")
+        return
     print(f"OK notified={n} cells, {len(payloads)} emails")
 
 

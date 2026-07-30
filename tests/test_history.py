@@ -44,6 +44,22 @@ def test_corrupt_lines_skipped():
     assert len(out) == 1
 
 
+def test_bad_detected_at_does_not_crash():
+    """回归：一行脏历史曾能每轮炸掉监控（自我延续的中毒态）。
+    naive 时间串与非字符串都必须被容忍，而不是抛 TypeError。"""
+    bad = [
+        json.dumps({"office": "FTO", "date": "2026-09-08", "session": "R",
+                    "detected_at": "2026-07-30T15:00:00"}),      # 无时区
+        json.dumps({"office": "FTO", "date": "2026-09-08", "session": "R",
+                    "detected_at": 1234567890}),                  # 非字符串
+        json.dumps({"office": "FTO", "date": "2026-09-08", "session": "R",
+                    "detected_at": "not-a-date"}),
+    ]
+    for line in bad:
+        out = history_fresh([ev()], [line], NOW)   # 不抛异常即通过
+        assert isinstance(out, list)
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

@@ -125,6 +125,50 @@ def test_apply_change_prefs_update_and_describe():
     assert describe_prefs({}) == "全部办事处、全部日期"
 
 
+def test_reply_to_our_confirmation_keeps_user_intent():
+    """回归🔴：用户回复我们的确认信说「退订」，曾被主题里的「订阅」二字
+    反向判成订阅，退订链路整体失效（三种场景本机复现过）。"""
+    assert classify("Re: ✅ 已开启香港ID放号提醒", "退订") == "unsubscribe"
+    assert classify("Re: ✅ 已开启香港ID放号提醒", "取消订阅") == "unsubscribe"
+    assert classify("Re: 已停止香港ID放号提醒", "我要重新订阅") == "subscribe"
+    # 即使旧版主题（含「订阅」二字）被带回，也必须只信正文
+    assert classify("Re: ✅ 订阅成功：香港ID预约放号提醒", "退订") == "unsubscribe"
+
+
+def test_english_unsubscribe_with_reply_prefix():
+    """回归🔴：英文只认主题全等，任何客户端回复都带 Re: → 退订彻底不通。"""
+    assert classify("Re: unsubscribe", "") == "unsubscribe"
+    assert classify("Fwd: Unsubscribe", "") == "unsubscribe"
+    assert classify("unsubscribe me", "") == "unsubscribe"
+    assert classify("Re: subscribe", "") == "subscribe"
+    # 英文营销邮件仍要挡住（正文匹配不放行）
+    assert classify("Weekly Digest", "Click to unsubscribe from this list") is None
+
+
+def test_roster_padding_hides_subscriber_count():
+    """回归🟡：Fernet 无填充，密文长度与订阅人数呈线性关系，
+    公开仓库里任何人都能反推有多少人订阅。"""
+    import os
+    import tempfile
+    from pathlib import Path as P
+    from cryptography.fernet import Fernet
+    from quota_monitor import subscribe as S
+    os.environ["SUBSCRIBER_KEY"] = Fernet.generate_key().decode()
+    tmp = P(tempfile.mkdtemp())
+    orig = S.ENC_PATH
+    try:
+        S.ENC_PATH = tmp / "r.enc"
+        sizes = set()
+        for n in (1, 3, 10, 30):
+            S.save_roster([{"email": f"u{i}@x.com", "active": True} for i in range(n)])
+            sizes.add(S.ENC_PATH.stat().st_size)
+        assert len(sizes) == 1, f"密文长度仍泄露人数: {sizes}"
+        S.save_roster([{"email": "a@b.com", "active": True}])
+        assert S.load_roster() == [{"email": "a@b.com", "active": True}]
+    finally:
+        S.ENC_PATH = orig
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

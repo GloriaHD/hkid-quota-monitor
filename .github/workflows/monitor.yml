@@ -57,52 +57,71 @@ jobs:
 
       - name: Commit data
         id: commit
+        env:
+          COMMIT_DATA: ${{ steps.run.outputs.commit }}   # 经 env 传入，不内插进 shell
         run: |
           git config user.name "quota-bot"
           git config user.email "actions@users.noreply.github.com"
 
-          # 本轮是否真的改过这两个有状态的文件（在任何 reset 之前判定）：
+          # 本轮是否真的改过这两个有状态的文件（必须在任何 reset 之前判定）：
           # 改过 -> 本轮版本更新，应覆盖远端；没改过 -> 保留远端版本，
           # 避免并发轮次把别人刚登记的订阅者/冷却状态冲掉
           roster_mine=$(git status --porcelain -- data/subscribers.json.enc)
           state_mine=$(git status --porcelain -- data/notify_state.json)
 
-          echo "changed=false" >> "$GITHUB_OUTPUT"
-          for attempt in 1 2 3; do
-            git fetch -q origin main
-            # 工作区（本轮新数据）原样保留，只把提交基线移到远端最新。
-            # 配额数据是每轮全量重写的快照，不存在需要合并的增量，
-            # 因此「本轮最新者胜」，绝不进 rebase 冲突（2分钟节奏下会频繁撞车）
-            git reset -q --soft origin/main
-            if [ -z "$roster_mine" ]; then
-              git checkout -q origin/main -- data/subscribers.json.enc 2>/dev/null || true
-            fi
-            if [ -z "$state_mine" ]; then
-              git checkout -q origin/main -- data/notify_state.json 2>/dev/null || true
-            fi
+          # 本轮产出先搬出工作区，因为下面要把工作区硬对齐远端
+          MINE="${RUNNER_TEMP}/data-mine"
+          rm -rf "$MINE"; mkdir -p "$MINE"; cp -a data/. "$MINE/"
 
-            if [ "${{ steps.run.outputs.commit }}" = "true" ]; then
-              git add data/
-            else
-              for f in data/subscribers.json.enc data/notify_state.json; do
-                if [ -f "$f" ]; then git add "$f"; fi
+          CHANGED=false
+          for attempt in 1 2 3; do
+            if ! git fetch -q origin main; then
+              echo "fetch failed, retry $attempt"; sleep $((attempt * 3)); continue
+            fi
+            # 硬对齐远端：索引与工作区都必须是远端最新。
+            # 曾用 reset --soft，那样索引仍是 checkout 时的旧树，提交会把
+            # 这期间别人推的代码静默回滚（CI 全绿、push 是快进，看不出异常）。
+            git reset -q --hard origin/main
+
+            # 再把「本轮拥有」的文件放回去，只碰 data/ 下这几个
+            if [ "$COMMIT_DATA" = "true" ]; then
+              for f in quota.json quota_prev.json events.json meta.json; do
+                if [ -f "$MINE/$f" ]; then cp -f "$MINE/$f" "data/$f"; fi
               done
             fi
+            # history.jsonl 是 append-only，「最新者胜」对它是错的语义：
+            # 以远端为底，只补上本轮新增的行
+            if [ -f "$MINE/history.jsonl" ]; then
+              if [ -f data/history.jsonl ]; then
+                awk 'NR==FNR{seen[$0];next} !($0 in seen)' \
+                  data/history.jsonl "$MINE/history.jsonl" >> data/history.jsonl
+              else
+                cp -f "$MINE/history.jsonl" data/history.jsonl
+              fi
+            fi
+            if [ -n "$roster_mine" ] && [ -f "$MINE/subscribers.json.enc" ]; then
+              cp -f "$MINE/subscribers.json.enc" data/subscribers.json.enc
+            fi
+            if [ -n "$state_mine" ] && [ -f "$MINE/notify_state.json" ]; then
+              cp -f "$MINE/notify_state.json" data/notify_state.json
+            fi
 
+            git add data/
             if git diff --cached --quiet; then
-              echo "nothing to commit"
-              exit 0
+              echo "nothing to commit"; break
             fi
             git commit -q -m "data: $(date -u +'%Y-%m-%dT%H:%M:%SZ') [skip ci]"
             if git push -q origin HEAD:main; then
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-              exit 0
+              CHANGED=true; break
             fi
-            echo "push raced with another run, retry $attempt"
+            echo "::warning::push raced with another run, retry $attempt"
             sleep $((attempt * 3))
           done
-          # 数据提交失败不该让整轮监控判定为失败：抓取与通知都已完成
-          echo "WARN: data commit gave up after retries"
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          if [ "$CHANGED" = "false" ] && [ -n "$(git log origin/main..HEAD --oneline)" ]; then
+            # 数据提交失败不判整轮失败（抓取与通知已完成），但要留告警痕迹
+            echo "::warning::data commit gave up after retries"
+          fi
 
       - name: Purge jsDelivr cache (mainland mirror freshness)
         if: steps.commit.outputs.changed == 'true'

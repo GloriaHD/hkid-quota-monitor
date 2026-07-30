@@ -2,7 +2,7 @@
 
 ![monitor](https://github.com/chen1111-a/hkid-quota-monitor/actions/workflows/monitor.yml/badge.svg)
 
-监控香港入境处六大人事登记办事处的智能身份证预约配额，约 5 分钟检测一次，
+监控香港入境处六大人事登记办事处的智能身份证预约配额，约 2 分钟检测一次，
 放号时通过邮件 / 飞书群提醒订阅者。**第三方公益工具，非入境处官方服务；只做监控提醒，不做任何代抢代约。**
 
 ## 看板入口
@@ -15,25 +15,25 @@
 ## 它怎么工作
 
 ```
-cron-job.org（每5分钟）──▶ GitHub Actions
+cron-job.org（每2分钟）──▶ GitHub Actions
                             │  python -m quota_monitor.run
                             │  ├─ 抓入境处公开配额接口（只读，一次一请求）
                             │  ├─ 与上一轮快照 diff → 放号事件
                             │  └─ commit data/ + 刷新 jsDelivr 缓存
                             ▼
-        index.html 看板（手机优先，5分钟自动刷新）
+        index.html 看板（手机优先，90 秒自动刷新）
         邮件 + 飞书通知（放号事件触发，带防抖冷却）
 ```
 
 - 接口结构：[docs/api-notes.md](docs/api-notes.md)
-- 5 分钟触发配置：[docs/cron-setup.md](docs/cron-setup.md)
+- 2 分钟触发配置：[docs/cron-setup.md](docs/cron-setup.md)
 
 ## 相比同类工具的改进
 
 - **手机优先**：日期做行纵向滚动，6 办事处一屏放下，不用横向拖表格
 - **色盲友好**：状态格颜色+文字双通道（有/少/满）
-- **防通知轰炸**：官方接口存在负载均衡数据抖动（实测同一分钟内 304↔346 格波动），通知层带单格冷却期，不会每 5 分钟轰炸一次
-- **内地直连**：看板镜像与订阅链路均不需要科学上网
+- **防通知轰炸**：官方接口存在负载均衡数据抖动（实测同一分钟内 304↔346 格波动），通知层带单格冷却期，不会每轮都轰炸一次
+- **内地直连**：邮件订阅与飞书通知链路全程国内直达，无需科学上网
 - 深浅双主题、摘要卡直接回答「最早哪天能约」
 
 ## 个性化订阅
@@ -62,7 +62,7 @@ cron-job.org（每5分钟）──▶ GitHub Actions
 
 ## 一键自部署（拥有一套自己的监控）
 
-整套系统零服务器、零费用，5 步搭一套：
+整套系统零服务器、零费用，6 步搭一套：
 
 1. **Fork 本仓库**（右上角 Fork 按钮）
 2. Fork 后进入自己仓库的 **Actions** 页 → 点绿色按钮启用 workflow（GitHub 对 fork 默认停用）
@@ -75,8 +75,9 @@ cron-job.org（每5分钟）──▶ GitHub Actions
    | `ADMIN_EMAIL` | 你自己的收件邮箱 |
    | `SUBSCRIBER_KEY` | Fernet 密钥，本地跑 `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` 生成 |
    | `FEISHU_WEBHOOK` | （可选）飞书群自定义机器人 webhook |
-5. （要 5 分钟级才需要）照 [docs/cron-setup.md](docs/cron-setup.md) 配 cron-job.org；不配则走 15 分钟兜底调度
-6. （开放订阅才需要）把 `index.html` 顶部 `SUBSCRIBE_EMAIL` 填成你的收件 QQ 邮箱，`FEISHU_GROUP_URL` 填飞书群分享链接
+5. （要 2 分钟级才需要）照 [docs/cron-setup.md](docs/cron-setup.md) 配 cron-job.org；不配则走 15 分钟兜底调度
+6. （开放订阅才需要）改 `index.html` 顶部三个常量：`OWNER_REPO` 改成你的 `用户名/仓库名`，`SUBSCRIBE_EMAIL` 填收件 QQ 邮箱，`FEISHU_GROUP_URL` 填飞书群链接。
+   ⚠️ 不改 `OWNER_REPO` 时订阅入口会自动隐藏（防止 fork 的用户误把订阅信发给原作者），这是有意设计
 
 ## 声明
 

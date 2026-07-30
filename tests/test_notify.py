@@ -6,8 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from quota_monitor.notify import (event_matches, filter_events, load_alert_cfg,
-                                  summarize, tier_of)
+from quota_monitor.notify import (compose, event_matches, filter_events,
+                                  load_alert_cfg, summarize, tier_of)
 
 HKT = timezone(timedelta(hours=8))
 T0 = datetime(2026, 7, 30, 12, 0, tzinfo=HKT)
@@ -109,6 +109,50 @@ def test_event_matches_personalization():
     assert event_matches({"before": "2026-09-09"}, e)
     assert not event_matches({"before": "2026-09-08"}, e)          # 边界：等于截止日不算
     assert not event_matches({"offices": ["RHK"], "before": "2026-09-01"}, e)
+
+
+def test_compose_counts_use_tier_scope():
+    """回归🟡：主题/正文/飞书三处用了三种计数，@所有人的强提醒会报错数字。
+    「X 前有 N 个」必须是该档内的个数，不是本批总数。"""
+    events = [ev(date="2026-08-20"), ev(date="2026-09-10"), ev(date="2026-09-11")]
+    subject, html_body = compose(events, CFG)          # 1 个 urgent + 2 个 notice
+    assert "前有 1 个名额" in subject and "🚨" in subject
+    assert "前有 1 个名额放出" in html_body
+    assert "本批共检出 3 个" in html_body               # 总数另起一句，不混淆
+    subject2, _ = compose([ev(date="2026-11-20")], CFG)
+    assert subject2 == "🎫 香港ID预约放号：1 个名额"
+
+
+def test_load_state_survives_corruption(tmp_path=None):
+    """回归🟡：state 文件被写坏时曾整轮炸掉通知链路，且文件提交回仓库后每轮必死。"""
+    import tempfile
+    from pathlib import Path as P
+    from quota_monitor import notify as N
+    orig = N.STATE_PATH
+    tmp = P(tempfile.mkdtemp())
+    try:
+        N.STATE_PATH = tmp / "s.json"
+        assert N.load_state() == {"cell_last_notified": {}}       # 文件不存在
+        N.STATE_PATH.write_text("{broken", encoding="utf-8")
+        assert N.load_state() == {"cell_last_notified": {}}       # 坏 JSON
+        N.STATE_PATH.write_text('["not","a","dict"]', encoding="utf-8")
+        assert N.load_state() == {"cell_last_notified": {}}       # 结构异常
+    finally:
+        N.STATE_PATH = orig
+
+
+def test_filter_events_tolerates_bad_timestamp():
+    state = {"cell_last_notified": {"FTO|2026-09-08|R": "not-a-time"}}
+    out = filter_events([ev()], state, 360, now=T0)               # 不抛异常
+    assert len(out) == 1
+
+
+def test_prune_state_drops_malformed_keys():
+    from quota_monitor.notify import prune_state
+    state = {"cell_last_notified": {"badkey": T0.isoformat(),
+                                    "FTO|2026-09-08|R": T0.isoformat()}}
+    prune_state(state, today="2026-07-30")
+    assert list(state["cell_last_notified"]) == ["FTO|2026-09-08|R"]
 
 
 if __name__ == "__main__":

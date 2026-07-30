@@ -6,7 +6,7 @@
 环境变量：
 - QQ_SMTP_USER / QQ_SMTP_PASS : 收件 QQ 邮箱与授权码（IMAP/SMTP 同一授权码）
 - SUBSCRIBER_KEY              : Fernet 密钥（生成：python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"）
-- DRY_RUN=1                   : 不发确认邮件、不标已读
+- DRY_RUN=1                   : 不发确认邮件、不标已读（用 BODY.PEEK 读取，不影响未读态）
 """
 
 from __future__ import annotations
@@ -25,6 +25,8 @@ from email.header import Header
 from email.mime.text import MIMEText
 from email.utils import formataddr, parseaddr
 from pathlib import Path
+
+from .util import mask_email
 
 HKT = timezone(timedelta(hours=8))
 DATA = Path("data")
@@ -109,6 +111,22 @@ _NOREPLY_LOCALS = {"noreply", "no-reply", "donotreply", "do-not-reply", "bounce"
                    "mailer-daemon", "postmaster", "notify", "notifications",
                    "news", "newsletter", "hello", "info", "support"}
 
+# 回复/转发前缀：用户回复本系统邮件时，客户端会把原主题带回来
+_REPLY_PREFIX = re.compile(r"^\s*((re|fwd|fw|答复|回覆|回复|转发|轉發)\s*[:：]\s*)+", re.I)
+_EN_SUB = re.compile(r"(un)?subscribe(\s+me)?", re.I)
+# 本系统自己发出的邮件主题特征——被回复带回时不代表用户意图，必须忽略。
+# 必须收窄到系统主题独有的形态：用户自己的订阅主题是「订阅香港ID放号提醒」，
+# 若标记写成宽泛的「香港ID放号提醒」会把正常订阅也误杀。
+_OUR_SUBJECT_MARKS = (
+    "已开启香港ID放号提醒", "已停止香港ID放号提醒",   # 确认信
+    "订阅成功：", "已退订：",                        # 旧版确认信（用户邮箱里可能还有）
+    "紧急放号：", "香港ID放号：", "香港ID预约放号：",  # 放号通知信
+)
+
+
+def _strip_reply_prefix(subject: str) -> str:
+    return _REPLY_PREFIX.sub("", subject or "").strip()
+
 
 def is_machine_sender(addr: str) -> bool:
     """营销/系统邮件的典型发件地址——不当订阅者处理。
@@ -120,15 +138,18 @@ def is_machine_sender(addr: str) -> bool:
 def classify(subject: str, body: str) -> str | None:
     """'subscribe' / 'unsubscribe' / None。
 
-    中文关键词：主题优先于正文（正文只看非引用部分），退订词优先
-    （"取消订阅"同时含两类词）。英文关键词只接受主题精确匹配——
-    英文营销邮件正文几乎必含 unsubscribe/subscribe 字样，模糊匹配会误登记。"""
-    low = subject.strip().lower()
-    if low == "unsubscribe":
-        return "unsubscribe"
-    if low == "subscribe":
-        return "subscribe"
-    for text in (subject, _strip_quoted(body)):
+    主题先剥掉 Re:/Fwd: 前缀；**若剥完是本系统自己的主题，则整个主题不代表
+    用户意图，只信正文**——否则用户回复我们的确认信说「退订」，会被主题里的
+    「订阅」二字反向判成订阅，退订链路直接失效（曾真实存在）。
+    中文：主题优先于正文（正文只看非引用部分），同层级内退订词优先。
+    英文：只接受主题整体匹配——英文营销邮件正文几乎必含 unsubscribe 字样。"""
+    subj = _strip_reply_prefix(subject)
+    m = _EN_SUB.fullmatch(subj)
+    if m:
+        return "unsubscribe" if m.group(1) else "subscribe"
+    if any(mark in subj for mark in _OUR_SUBJECT_MARKS):
+        subj = ""  # 是本系统发出的主题被带回，丢弃
+    for text in (subj, _strip_quoted(body)):
         if any(w in text for w in ("退订", "取消订阅")):
             return "unsubscribe"
         if "订阅" in text:
@@ -164,7 +185,7 @@ def apply_change(subs: list[dict], addr: str, action: str,
             existing["updated"] = now_iso
             return subs, True
         if len([s for s in subs if s.get("active", True)]) >= MAX_SUBSCRIBERS:
-            print(f"WARN roster full ({MAX_SUBSCRIBERS}), rejected {addr}")
+            print(f"WARN roster full ({MAX_SUBSCRIBERS}), rejected {mask_email(addr)}")
             return subs, False
         rec = {"email": addr, "active": True, "updated": now_iso}
         _set_prefs(rec)
@@ -185,12 +206,19 @@ def _fernet():
 def load_roster() -> list[dict]:
     if not ENC_PATH.exists():
         return []
-    return json.loads(_fernet().decrypt(ENC_PATH.read_bytes()))
+    return json.loads(_fernet().decrypt(ENC_PATH.read_bytes()).decode().rstrip())
+
+
+_PAD_BLOCK = 4096
 
 
 def save_roster(subs: list[dict]) -> None:
-    ENC_PATH.write_bytes(_fernet().encrypt(
-        json.dumps(subs, ensure_ascii=False).encode()))
+    """加密前填充到固定块大小。Fernet 不做长度填充，密文长度与条数呈线性
+    关系（实测 1 条=204B），公开仓库里任何人都能据此推算订阅人数、并从
+    提交时间轴看出谁在何时订阅——填充后只剩块级粒度。"""
+    raw = json.dumps(subs, ensure_ascii=False).encode()
+    pad = (-len(raw)) % _PAD_BLOCK
+    ENC_PATH.write_bytes(_fernet().encrypt(raw + b" " * pad))
 
 
 def _decode_header(raw: str) -> str:
@@ -234,8 +262,10 @@ def _body_text(msg: email.message.Message) -> str:
 
 def send_confirmation(user: str, pwd: str, addr: str, action: str, dry: bool,
                       prefs_desc: str = "") -> None:
+    # 主题刻意不含「订阅/退订」二字：用户回复本信时客户端会带回原主题，
+    # 含关键词会让 classify 误判成与用户意图相反的动作
     if action == "subscribe":
-        subject = "✅ 订阅成功：香港ID预约放号提醒"
+        subject = "✅ 已开启香港ID放号提醒"
         scope = prefs_desc or "全部办事处、全部日期"
         html = (f"<p>订阅成功！你的订阅范围：<b>{scope}</b>。"
                 f"范围内一有名额放出，会第一时间邮件通知你。</p>"
@@ -244,10 +274,11 @@ def send_confirmation(user: str, pwd: str, addr: str, action: str, dry: bool,
                 f"<p style='color:#999;font-size:12px'>想停止提醒：给本邮箱另发一封主题为「退订」的新邮件即可。"
                 f"第三方公益工具，非入境处官方服务。</p>")
     else:
-        subject = "已退订：香港ID预约放号提醒"
-        html = "<p>已为你退订，不会再收到放号提醒。想重新订阅随时再发「订阅」。</p>"
+        subject = "已停止香港ID放号提醒"
+        html = ("<p>已为你停止提醒，不会再收到放号通知。"
+                "想重新开启：给本邮箱另发一封主题为「订阅」的新邮件即可。</p>")
     if dry:
-        print(f"[DRY] confirm({action}) -> {addr}")
+        print(f"[DRY] confirm({action}) -> {mask_email(addr)}")
         return
     msg = MIMEText(html, "html", "utf-8")
     msg["Subject"] = Header(subject, "utf-8")
@@ -257,7 +288,7 @@ def send_confirmation(user: str, pwd: str, addr: str, action: str, dry: bool,
         s.starttls(context=ssl.create_default_context())
         s.login(user, pwd)
         s.sendmail(user, [addr], msg.as_string())
-    print(f"confirm({action}) sent -> {addr}")
+    print(f"confirm({action}) sent -> {mask_email(addr)}")
 
 
 def main() -> None:
@@ -288,7 +319,9 @@ def main() -> None:
             # 1) 已处理邮件的名册变更已即时落盘，不会因后续崩溃丢失
             # 2) finally 保证标已读，毒邮件不会每轮重复卡死链路
             try:
-                _, msg_data = imap.fetch(mid, "(RFC822)")
+                # BODY.PEEK 才不会隐式置 \Seen——标已读的权力只留给下面的 finally，
+                # 否则解析中途崩溃的邮件已被标已读，永不重试 = 静默丢订阅
+                _, msg_data = imap.fetch(mid, "(BODY.PEEK[])")
                 msg = email.message_from_bytes(msg_data[0][1])
                 addr = parseaddr(msg.get("From", ""))[1].lower()
                 subject = _decode_header(msg.get("Subject", ""))
@@ -306,7 +339,7 @@ def main() -> None:
                             send_confirmation(user, pwd, addr, action, dry,
                                               describe_prefs(prefs))
                         except Exception as e:  # noqa: BLE001 - 确认信失败不影响登记
-                            print(f"WARN confirm mail failed for {addr}: {e}")
+                            print(f"WARN confirm mail failed for {mask_email(addr)}: {e}")
             except Exception as e:  # noqa: BLE001
                 print(f"WARN skip malformed mail uid={mid!r}: {e}")
             finally:

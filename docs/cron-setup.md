@@ -1,7 +1,7 @@
-# cron-job.org 每 5 分钟触发配置（可选增强，10 分钟搞定）
+# cron-job.org 每 2 分钟触发配置（可选增强，10 分钟搞定）
 
 不配置时系统靠 GitHub Actions 自带 schedule 兜底（约 15 分钟一次，高峰期可能延迟）。
-配置后达到稳定 5 分钟一次，和参考项目持平。
+配置后达到稳定 2 分钟一次，和参考项目持平。
 
 ## 步骤
 
@@ -18,7 +18,7 @@
 3. **建 Cron Job**
    - Create cronjob
    - URL: `https://api.github.com/repos/chen1111-a/hkid-quota-monitor/dispatches`
-   - Schedule: Every 5 minutes
+   - Schedule: Every 2 minutes
    - 展开 Advanced：
      - Request method: **POST**
      - Headers 加三条：

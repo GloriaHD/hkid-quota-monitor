@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>香港身份证预约配额看板</title>
-<meta name="description" content="香港入境处智能身份证预约配额实时监控：5分钟级检测六大办事处放号情况（第三方工具，非官方）">
+<meta name="description" content="香港入境处智能身份证预约配额实时监控：2分钟级检测六大办事处放号情况（第三方工具，非官方）">
 <style>
 :root {
   --bg: #fcfcfb; --card: #ffffff; --ink: #1c1c1a; --ink-2: #5f5e5a; --ink-3: #92918c;
@@ -131,7 +131,7 @@ footer a { color: var(--ink-2); }
   </header>
   <div class="fresh" id="fresh">加载中…</div>
   <div id="proof" class="proof"></div>
-  <div id="err"></div>
+  <div id="err" role="alert" aria-live="assertive"></div>
   <div id="banner"></div>
 
   <div class="cards" id="cards" aria-label="各办事处最早可约摘要"></div>
@@ -161,7 +161,7 @@ footer a { color: var(--ink-2); }
   <div id="subArea"><!-- Phase 5: 订阅入口 --></div>
 
   <footer>
-    第三方公益工具，数据来自入境处公开配额查询接口，每约 5 分钟检测一次，请以
+    第三方公益工具，数据来自入境处公开配额查询接口，每约 2 分钟检测一次，请以
     <a href="https://www.gov.hk/tc/residents/immigration/idcard/hkic/bookregidcard.htm" target="_blank" rel="noopener">入境处官网</a>
     为准。仅供学习交流，请勿用于商业用途。反黄牛：本工具只做监控提醒，不做任何代抢代约。
   </footer>
@@ -178,8 +178,12 @@ var REPO = (function () {
   if (j) return j[1] + "/" + j[2];
   return "chen1111-a/hkid-quota-monitor";
 })();
-var SUBSCRIBE_EMAIL = "2037445294@qq.com";   // 订阅收件邮箱（配置后订阅区自动出现）
-var FEISHU_GROUP_URL = "https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=726v4702-ecda-452b-9c61-3b9b4d0d5cb6";  // 飞书群分享链接（配置后按钮自动出现）
+/* 订阅入口只在本仓库生效：fork 出去后自动置空，避免把 fork 用户的订阅信
+   和群成员导给原作者。自部署者把 OWNER_REPO 改成自己的仓库并填这两项即可。 */
+var OWNER_REPO = "chen1111-a/hkid-quota-monitor";
+var SUBSCRIBE_EMAIL = REPO === OWNER_REPO ? "2037445294@qq.com" : "";
+var FEISHU_GROUP_URL = REPO === OWNER_REPO
+  ? "https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=726v4702-ecda-452b-9c61-3b9b4d0d5cb6" : "";  // 飞书群分享链接（配置后按钮自动出现）
 var OFFICE_SHORT = { FTO: "火炭", RHK: "港岛", RKO: "九龙", RTK: "将军澳", TMO: "屯门", YLO: "元朗" };
 var OFFICE_ORDER = ["RHK", "RKO", "RTK", "FTO", "TMO", "YLO"];
 var WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
@@ -187,6 +191,13 @@ var DATA_URLS = [
   "data/quota.json",
   "https://cdn.jsdelivr.net/gh/" + REPO + "@main/data/quota.json"
 ];
+/* 上游 API 字段会经 data/quota.json 流到每个访问者的浏览器，
+   一律转义后再进 innerHTML（存储型 XSS 防线） */
+function esc(v) {
+  return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
 var state = { data: null, meta: null, cfg: null, hideOffice: {}, onlyOpen: false };
 
 document.getElementById("ghLink").href = "https://github.com/" + REPO;
@@ -210,7 +221,7 @@ document.getElementById("themeBtn").onclick = function () {
 function fetchData(i) {
   i = i || 0;
   if (i >= DATA_URLS.length) { showErr("数据加载失败，请稍后刷新重试"); return; }
-  var bust = "?t=" + Math.floor(Date.now() / 60000);
+  var bust = "?t=" + Math.floor(Date.now() / 30000);  // 30s 桶，跟上 2 分钟数据节奏
   fetch(DATA_URLS[i] + bust, { cache: "no-store" })
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(function (d) {
@@ -223,7 +234,15 @@ function fetchData(i) {
           .catch(function () { return null; });
       };
       return Promise.all([aux("data/meta.json"), aux("config.json")])
-        .then(function (res) { state.meta = res[0]; state.cfg = res[1]; render(); });
+        .then(function (res) {
+          state.meta = res[0]; state.cfg = res[1];
+          // 渲染异常必须与网络失败区分开：否则用户被引导去做无用的刷新，
+          // 而且会白白多切换一次数据源
+          try { render(); } catch (err) {
+            showErr("页面渲染异常，请刷新重试（数据已取到）");
+            if (window.console) console.error(err);
+          }
+        });
     })
     .catch(function () { fetchData(i + 1); });
 }
@@ -256,7 +275,7 @@ function render() {
   var last = lastIso ? new Date(lastIso) : null;
   var ageMin = last ? Math.round((Date.now() - last.getTime()) / 60000) : null;
   var freshEl = document.getElementById("fresh");
-  freshEl.innerHTML = "官方数据 <b>" + (meta.source_update_time || d.source_update_time || "?") + "</b>（港时）· 数据入库 " +
+  freshEl.innerHTML = "官方数据 <b>" + esc(meta.source_update_time || d.source_update_time || "?") + "</b>（港时）· 数据入库 " +
     (ageMin === null ? "?" : ageMin <= 0 ? "刚刚" : ageMin + " 分钟前") +
     (ageMin !== null && ageMin > 30 ? ' <span class="stale">⚠ 数据可能滞后</span>' : "");
 
@@ -278,7 +297,7 @@ function render() {
       offices.forEach(function (off) {
         var c = cellOf(d.quota, off, date);
         if (!c || (c.best !== "g" && c.best !== "y")) return;
-        var label = (OFFICE_SHORT[off] || off) + " " + date.slice(5).replace("-", "/");
+        var label = esc(OFFICE_SHORT[off] || off) + " " + esc(date.slice(5).replace("-", "/"));
         if (cfg.urgent_before && date < cfg.urgent_before) urgentHits.push(label);
         else if (cfg.notice_before && date < cfg.notice_before) noticeHits.push(label);
       });
@@ -314,7 +333,12 @@ function render() {
     var el = document.createElement("div");
     el.className = "card" + (state.hideOffice[off] ? " off" : "");
     el.setAttribute("role", "button");
-    el.innerHTML = '<div class="nm">' + (OFFICE_SHORT[off] || off) + "</div>" +
+    el.setAttribute("tabindex", "0");
+    el.setAttribute("aria-pressed", state.hideOffice[off] ? "false" : "true");
+    el.onkeydown = function (ev) {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); el.onclick(); }
+    };
+    el.innerHTML = '<div class="nm">' + esc(OFFICE_SHORT[off] || off) + "</div>" +
       '<div class="st' + (n ? " has" : "") + '">' +
       (n ? "最早 " + first.slice(5).replace("-", "/") + " · " + n + " 天有" : "全部已满") + "</div>";
     el.onclick = function () {
@@ -328,7 +352,7 @@ function render() {
   var shown = offices.filter(function (o) { return !state.hideOffice[o]; });
   var thr = document.getElementById("thr");
   thr.innerHTML = "<th></th>" + shown.map(function (o) {
-    return "<th>" + (OFFICE_SHORT[o] || o) + "</th>";
+    return "<th>" + esc(OFFICE_SHORT[o] || o) + "</th>";
   }).join("");
   document.getElementById("cg").innerHTML =
     '<col class="dcol">' + shown.map(function () { return "<col>"; }).join("");
@@ -346,8 +370,8 @@ function render() {
       rows.push('<tr class="mo"><td class="m" colspan="' + (shown.length + 1) + '">' +
         parseInt(mo.slice(5), 10) + " 月</td></tr>");
     }
-    var dt = new Date(date + "T00:00:00+08:00");
-    var wd = dt.getDay();
+    // 用 UTC 取值，否则 UTC+8 以西的用户看到的星期整体错一天
+    var wd = new Date(date + "T00:00:00Z").getUTCDay();
     var tds = cells.map(function (c) {
       if (!c || c.best === "x") return '<td class="q x">—</td>';
       var ch = c.best === "g" ? "有" : c.best === "y" ? "少" : "满";
@@ -359,8 +383,17 @@ function render() {
     shownRows++;
   });
   tb.innerHTML = rows.join("");
-  document.getElementById("empty").style.display = shownRows ? "none" : "block";
-  document.getElementById("tbl").style.display = shownRows ? "" : "none";
+  var emptyEl = document.getElementById("empty");
+  if (!shown.length) {
+    emptyEl.textContent = "已隐藏全部办事处，点上方卡片恢复显示";
+  } else if (!shownRows) {
+    emptyEl.textContent = state.onlyOpen
+      ? "当前筛选下没有可约名额，订阅通知蹲守放号 ↓"
+      : "暂无数据，请稍后刷新";
+  }
+  var blank = !shown.length || !shownRows;
+  emptyEl.style.display = blank ? "block" : "none";
+  document.getElementById("tbl").style.display = blank ? "none" : "";
 }
 
 document.getElementById("onlyOpen").onchange = function () {
@@ -384,7 +417,7 @@ document.getElementById("onlyOpen").onchange = function () {
   document.getElementById("subArea").innerHTML =
     '<div class="subCard"><p>放号往往几分钟内被抢完——订阅后第一时间提醒你</p>' +
     '<div class="subBtns">' + btns.join("") + "</div>" +
-    (SUBSCRIBE_EMAIL ? '<div class="subHint">点按钮发送一封邮件即完成订阅（全程国内网络直连），约 5 分钟内收到确认邮件</div>' +
+    (SUBSCRIBE_EMAIL ? '<div class="subHint">点按钮发送一封邮件即完成订阅（全程国内网络直连），约 2 分钟内收到确认邮件</div>' +
       '<div class="subHint"><a style="color:var(--accent);text-decoration:none" href="mailto:' + SUBSCRIBE_EMAIL +
       "?subject=" + encodeURIComponent("订阅香港ID放号提醒") +
       "&body=" + encodeURIComponent(
@@ -419,18 +452,26 @@ function fetchProof() {
         " · 近 1 小时 <b>" + lastHour + "</b> 次" +
         (avg !== null ? " · 平均间隔 <b>" + avg.toFixed(1) + "</b> 分钟" : "") +
         ' · <span class="ticks">' + ticks + "</span>" +
-        '<a href="https://github.com/' + REPO + '/actions" target="_blank" rel="noopener">完整审计 ↗</a>';
+        '<a href="https://github.com/' + esc(REPO) + '/actions" target="_blank" rel="noopener">完整审计 ↗</a>';
       el.style.display = "flex";
     })
-    .catch(function () { /* API 不可达时静默 */ });
+    .catch(function () {
+      // 内地网络访问 api.github.com 会失败（也可能撞上 60次/小时 限流）——
+      // 最需要这块信任背书的人恰好看不到，至少要说明原因而不是静默消失
+      var el = document.getElementById("proof");
+      el.innerHTML = "⏱ 调度记录需访问 GitHub，当前网络不可达｜" +
+        '<a href="https://github.com/' + esc(REPO) + '/actions" target="_blank" rel="noopener">手动查看 ↗</a>';
+      el.style.display = "flex";
+    });
 }
 
-/* 每 5 分钟自动刷新；切回前台也刷新 */
+/* 90 秒自动刷新（数据 2 分钟一更）；切回前台也刷新 */
 fetchData();
 fetchProof();
-setInterval(fetchData, 5 * 60 * 1000);
+setInterval(fetchData, 90 * 1000);          // 数据 2 分钟一更，页面 90 秒重拉
+setInterval(fetchProof, 5 * 60 * 1000);     // 自证面板同样要保鲜，否则时间会说谎
 document.addEventListener("visibilitychange", function () {
-  if (!document.hidden) fetchData();
+  if (!document.hidden) { fetchData(); fetchProof(); }
 });
 </script>
 </body>

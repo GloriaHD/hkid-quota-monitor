@@ -1,4 +1,4 @@
-"""一轮完整巡检：读旧快照 -> 抓新 -> 校验 -> diff -> 落盘。CI 每 5 分钟调用一次。
+"""一轮完整巡检：读旧快照 -> 抓新 -> 校验 -> diff -> 落盘。CI 每 2 分钟调用一次。
 
 产物（均在 data/）：
 - quota.json      最新快照（看板数据源，内容确定性，不含抓取时间戳）
@@ -7,8 +7,8 @@
 - meta.json       抓取时间/新鲜度元信息（看板显示用）
 
 CI 集成：
-- 频率护栏：GITHUB_ACTIONS 下距上轮检查 < 4 分钟直接跳过
-  （schedule 与外部 dispatch 触发碰撞时保住「≥5 分钟/次」的接口友好承诺）
+- 频率护栏：GITHUB_ACTIONS 下距上轮检查 < 1.5 分钟直接跳过
+  （2 分钟 cron 与 schedule 兜底碰撞时兜底；1.5 而非 2.0 是为吸收调度抖动）
 - 提交决策：内容有变 / 首轮 / 心跳超时(20min) 才让 CI 提交，
   结果写 GITHUB_OUTPUT 的 commit 变量，避免纯时间戳提交灌爆仓库
 """
@@ -32,9 +32,17 @@ HEARTBEAT_MIN = 20
 
 
 def _read_json(path: Path) -> dict | None:
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return None
+    """读不出来一律当作「没有上一轮」。这些文件会被并发轮次提交、也可能被
+    人工编辑；若在此抛异常，崩溃点在写新 meta.json 之前，文件又被提交回仓库，
+    会形成每轮必崩的自我延续中毒态（只能人工修仓库）。"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except FileNotFoundError:
+        return None
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN {path} 读取失败({e})，按无历史处理")
+        return None
 
 
 HISTORY_COOLDOWN_H = 6
@@ -45,12 +53,16 @@ def history_fresh(events: list[dict], existing_lines: list[str],
     """放号规律统计的数据积累：只沉淀放号事件（quota_open/new_date），
     且同一格子 6 小时内只记一次——官方接口负载均衡抖动会让同一格
     反复 满↔有 横跳，裸记录一天能灌上万行噪声。"""
+    # 只回看冷却窗口内的行：原来按固定行数截断，隐式耦合「办事处×日期」总数，
+    # 窗口一变大冷却判定就会静默失效并反过来加速文件膨胀
+    cutoff = (now - timedelta(hours=HISTORY_COOLDOWN_H * 2)).isoformat()
     recent: dict[str, str] = {}
-    for ln in existing_lines[-3000:]:
+    for ln in existing_lines[-20000:]:
         try:
             r = json.loads(ln)
-            recent[f'{r["office"]}|{r["date"]}|{r["session"]}'] = r["detected_at"]
-        except (ValueError, KeyError):
+            if str(r["detected_at"]) >= cutoff:
+                recent[f'{r["office"]}|{r["date"]}|{r["session"]}'] = r["detected_at"]
+        except (ValueError, KeyError, TypeError):
             continue
     out = []
     for e in events:
@@ -62,8 +74,8 @@ def history_fresh(events: list[dict], existing_lines: list[str],
                 if (now - datetime.fromisoformat(last)).total_seconds() \
                         < HISTORY_COOLDOWN_H * 3600:
                     continue
-            except ValueError:
-                pass
+            except (ValueError, TypeError):
+                pass  # 坏时间戳当作无冷却；绝不能让一行脏历史每轮炸掉监控
         out.append(e)
     return out
 
@@ -94,7 +106,11 @@ def main() -> None:
 
     prev_meta = _read_json(DATA / "meta.json") or {}
     if os.environ.get("GITHUB_ACTIONS") and prev_meta.get("last_check"):
-        elapsed = (now - datetime.fromisoformat(prev_meta["last_check"])).total_seconds() / 60
+        try:
+            elapsed = (now - datetime.fromisoformat(
+                prev_meta["last_check"])).total_seconds() / 60
+        except (TypeError, ValueError):
+            elapsed = float("inf")
         if 0 <= elapsed < MIN_INTERVAL_MIN:
             print(f"skip: last check {elapsed:.1f}min ago (< {MIN_INTERVAL_MIN}min)")  # noqa: E501
             _set_output(False)
@@ -138,8 +154,11 @@ def main() -> None:
 
     heartbeat_due = True
     if prev_meta.get("last_check"):
-        heartbeat_due = (now - datetime.fromisoformat(prev_meta["last_check"])
-                         ).total_seconds() / 60 >= HEARTBEAT_MIN
+        try:
+            heartbeat_due = (now - datetime.fromisoformat(prev_meta["last_check"])
+                             ).total_seconds() / 60 >= HEARTBEAT_MIN
+        except (TypeError, ValueError):
+            heartbeat_due = True
     _set_output(content_changed or heartbeat_due)
     print(f"OK open_cells={open_cells} events={len(events)} "
           f"notify_worthy={meta['notify_worthy']} changed={content_changed}")

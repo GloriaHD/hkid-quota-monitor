@@ -10,7 +10,7 @@ import json
 import sys
 import time
 import urllib.request
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from pathlib import Path
 
 API_URL = "https://eservices.es2.immd.gov.hk/surgecontrolgate/ticket/getSituation"
@@ -22,13 +22,11 @@ USER_AGENT = (
 TIMEOUT = 30
 MAX_RETRIES = 3
 
-HKT = timezone(timedelta(hours=8))
-
 # quota-g 充足 / quota-y 少量 / quota-r 已满 / no-quotaX 该时段不开放
 _STATUS_MAP = {"quota-g": "g", "quota-y": "y", "quota-r": "r"}
 
 
-def _fetch_once() -> dict:
+def _fetch_once(timeout: int = TIMEOUT, retries: int = MAX_RETRIES) -> dict:
     """单次拉取，带重试与指数退避。"""
     url = f"{API_URL}?svcId={SVC_ID}&t={int(time.time() * 1000)}"
     req = urllib.request.Request(url, headers={
@@ -37,15 +35,15 @@ def _fetch_once() -> dict:
         "Accept": "application/json",
     })
     last_err: Exception | None = None
-    for attempt in range(MAX_RETRIES):
+    for attempt in range(retries):
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except Exception as e:  # noqa: BLE001 - 网络层任何错误都走同一退避
             last_err = e
-            if attempt < MAX_RETRIES - 1:
+            if attempt < retries - 1:
                 time.sleep(2 ** attempt * 2)  # 2s, 4s
-    raise RuntimeError(f"配额接口连续 {MAX_RETRIES} 次失败: {last_err}")
+    raise RuntimeError(f"配额接口连续 {retries} 次失败: {last_err}")
 
 
 def _update_ts(raw: dict) -> float:
@@ -63,14 +61,20 @@ def fetch_raw(samples: int = 3, gap_sec: float = 3.0) -> dict:
     的数据可差 2 分钟以上（表现为配额格反复横跳）。单次取样有概率打到旧节点，
     导致我们比别人晚发现放号；取两次挑最新的一份能显著削掉这段落后。"""
     best = _fetch_once()
+    parsed_any = _update_ts(best) > 0
     for _ in range(max(0, samples - 1)):
         time.sleep(gap_sec)
         try:
-            cand = _fetch_once()
+            # 补采是锦上添花：单独用短超时/不重试，否则一次节点抽风
+            # 就能把本轮拖过 2 分钟触发周期，形成监控空洞
+            cand = _fetch_once(timeout=8, retries=1)
         except RuntimeError:
             break  # 已有一份可用数据，不因补采失败拖垮本轮
+        parsed_any = parsed_any or _update_ts(cand) > 0
         if _update_ts(cand) > _update_ts(best):
             best = cand
+    if samples > 1 and not parsed_any:
+        print("WARN lastUpdateTime 全部无法解析，多取样已退化为单取样（官方可能改了格式）")
     return best
 
 
