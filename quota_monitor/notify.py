@@ -35,7 +35,7 @@ STATUS_TEXT = {"g": "充足", "y": "少量"}
 REPO = os.environ.get("GITHUB_REPOSITORY", "chen1111-a/hkid-quota-monitor")
 _OWNER, _NAME = REPO.split("/", 1)
 DASHBOARD = f"https://{_OWNER}.github.io/{_NAME}/"
-BOOKING = "https://system.es2.immd.gov.hk/smartics2-client/ropbooking/zh-HK/eservices/indexPage?svcId=57A"
+BOOKING = "https://www.gov.hk/tc/residents/immigration/idcard/hkic/bookregidcard.htm"
 
 
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")

@@ -81,6 +81,6 @@ cron-job.org（每5分钟）──▶ GitHub Actions
 ## 声明
 
 - 数据来自入境处公开配额查询页同源接口，抓取频率低于官方页面自身的自动刷新强度
-- 仅供学习交流，禁止商用；请以[入境处官网](https://www.immd.gov.hk/hks/services/hkid/registration_appointment_booking.html)为准
+- 仅供学习交流，禁止商用；请以[入境处官网](https://www.gov.hk/tc/residents/immigration/idcard/hkic/bookregidcard.htm)为准
 - 订阅者邮箱加密存储，退订随时生效
 - 运营上限：QQ 个人邮箱日发送额度有限（数百封/天量级），订阅规模接近该量级时应改用企业邮箱或专业发信服务
