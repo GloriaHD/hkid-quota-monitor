@@ -35,7 +35,9 @@ EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 SUB_WORDS = ("订阅", "SUBSCRIBE", "subscribe")
 UNSUB_WORDS = ("退订", "取消订阅", "UNSUBSCRIBE", "unsubscribe")
 
-DASHBOARD = "https://cdn.jsdelivr.net/gh/chen1111-a/hkid-quota-monitor@main/index.html"
+# fork 自部署时链接自动指向自己的仓库（CI 注入 GITHUB_REPOSITORY）
+_REPO = os.environ.get("GITHUB_REPOSITORY", "chen1111-a/hkid-quota-monitor")
+DASHBOARD = f"https://cdn.jsdelivr.net/gh/{_REPO}@main/index.html"
 
 
 _QUOTE_MARKERS = re.compile(

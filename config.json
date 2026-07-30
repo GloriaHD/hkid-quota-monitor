@@ -1,0 +1,5 @@
+{
+  "_说明": "分级提醒阈值：名额日期早于 urgent_before 触发大提醒(🚨邮件红头+飞书@所有人)，早于 notice_before 触发小提醒(🔔)，其余常规提醒。直接在 GitHub 网页编辑本文件即可生效，日期格式 YYYY-MM-DD。",
+  "urgent_before": "2026-09-01",
+  "notice_before": "2026-09-15"
+}

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import smtplib
 import ssl
 import sys
@@ -30,8 +31,39 @@ STATE_PATH = DATA / "notify_state.json"
 OFFICE_NAMES = {"FTO": "火炭", "RHK": "港岛(湾仔)", "RKO": "九龙", "RTK": "将军澳",
                 "TMO": "屯门", "YLO": "元朗"}
 STATUS_TEXT = {"g": "充足", "y": "少量"}
-DASHBOARD = "https://cdn.jsdelivr.net/gh/chen1111-a/hkid-quota-monitor@main/index.html"
+# fork 自部署时链接自动指向自己的仓库（CI 注入 GITHUB_REPOSITORY）
+REPO = os.environ.get("GITHUB_REPOSITORY", "chen1111-a/hkid-quota-monitor")
+DASHBOARD = f"https://cdn.jsdelivr.net/gh/{REPO}@main/index.html"
 BOOKING = "https://system.es2.immd.gov.hk/smartics2-client/ropbooking/zh-CN/eservices/makeAppointment/step1"
+
+
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def load_alert_cfg(path: str = "config.json") -> dict:
+    """读分级提醒阈值。config 是用户网页直编的不可信输入：
+    文件缺失/坏 JSON/非字符串/非 ISO 格式一律丢弃该键（回退为无分级），
+    绝不让一次手滑编辑炸掉通知链路；两阈值填反时自动对调。"""
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    cfg = {k: v for k, v in raw.items()
+           if k in ("urgent_before", "notice_before")
+           and isinstance(v, str) and _ISO_DATE.fullmatch(v)}
+    u, n = cfg.get("urgent_before"), cfg.get("notice_before")
+    if u and n and u > n:
+        cfg["urgent_before"], cfg["notice_before"] = n, u
+    return cfg
+
+
+def tier_of(date: str, cfg: dict) -> str:
+    """'urgent' / 'notice' / 'info'。ISO 日期字符串可直接比较；等于阈值日不算。"""
+    if cfg.get("urgent_before") and date < cfg["urgent_before"]:
+        return "urgent"
+    if cfg.get("notice_before") and date < cfg["notice_before"]:
+        return "notice"
+    return "info"
 
 
 def _now() -> datetime:
@@ -106,10 +138,20 @@ def load_subscribers() -> list[str]:
         return []
 
 
-def build_email_html(lines: list[str], n: int) -> str:
+def build_email_html(lines: list[str], n: int, tier: str = "info",
+                     cfg: dict | None = None) -> str:
     items = "".join(f"<li style='margin:4px 0'>{ln}</li>" for ln in lines)
+    cfg = cfg or {}
+    if tier == "urgent":
+        head_color, head = "#d03b3b", (f"🚨 {cfg.get('urgent_before', '近期')} 前有名额！"
+                                       f"共 {n} 个放出，手慢无")
+    elif tier == "notice":
+        head_color, head = "#b8860b", (f"🔔 {cfg.get('notice_before', '近期')} 前有名额，"
+                                       f"共 {n} 个放出")
+    else:
+        head_color, head = "#0b57d0", f"🎫 检测到 {n} 个预约名额放出"
     return f"""<div style="font-family:system-ui,'PingFang SC','Microsoft YaHei';max-width:560px">
-<h2 style="color:#0b57d0;margin:0 0 6px">🎫 检测到 {n} 个预约名额放出</h2>
+<h2 style="color:{head_color};margin:0 0 6px">{head}</h2>
 <p style="color:#666;margin:0 0 12px">香港入境处智能身份证预约（检测时间 {_now().strftime('%m-%d %H:%M')} 港时）</p>
 <ul style="padding-left:18px">{items}</ul>
 <p style="margin:16px 0">
@@ -149,7 +191,8 @@ def send_email(recipients: list[str], subject: str, html: str, dry: bool) -> Non
     print(f"email sent -> {sent} ok, {failed} failed")
 
 
-def send_feishu(lines: list[str], n: int, dry: bool) -> None:
+def send_feishu(lines: list[str], n: int, dry: bool, tier: str = "info",
+                cfg: dict | None = None) -> None:
     hook = os.environ.get("FEISHU_WEBHOOK", "")
     if not hook:
         print("skip feishu: no webhook")
@@ -157,7 +200,16 @@ def send_feishu(lines: list[str], n: int, dry: bool) -> None:
     if not hook.startswith("https://"):
         print("skip feishu: webhook must be https")
         return
-    text = (f"🎫 检测到 {n} 个香港ID预约名额放出\n" + "\n".join(lines) +
+    cfg = cfg or {}
+    if tier == "urgent":
+        # @所有人需群机器人开启「允许 @ 所有人」，未开启时飞书按普通文本展示
+        headline = (f'<at user_id="all">所有人</at> 🚨 '
+                    f"{cfg.get('urgent_before', '近期')} 前有名额！{n} 个放出，速抢")
+    elif tier == "notice":
+        headline = f"🔔 {cfg.get('notice_before', '近期')} 前有名额，{n} 个放出"
+    else:
+        headline = f"🎫 检测到 {n} 个香港ID预约名额放出"
+    text = (headline + "\n" + "\n".join(lines) +
             f"\n\n官方预约：{BOOKING}\n实时看板：{DASHBOARD}")
     if dry:
         print(f"[DRY] feishu:\n{text}")
@@ -200,9 +252,17 @@ def main() -> None:
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=1),
                           encoding="utf-8")
 
-    for send in (lambda: send_email(recipients, f"🎫 香港ID预约放号：{n} 个名额",
-                                    build_email_html(lines, n), dry),
-                 lambda: send_feishu(lines, n, dry)):
+    cfg = load_alert_cfg()
+    tiers = [tier_of(e["date"], cfg) for e in fresh]
+    tier = "urgent" if "urgent" in tiers else "notice" if "notice" in tiers else "info"
+    n_top = tiers.count(tier)
+    subject = {"urgent": f"🚨 紧急放号：{cfg.get('urgent_before', '近期')} 前有名额！（{n_top} 个）",
+               "notice": f"🔔 香港ID放号：{n} 个名额（含 {cfg.get('notice_before', '近期')} 前）",
+               "info": f"🎫 香港ID预约放号：{n} 个名额"}[tier]
+
+    for send in (lambda: send_email(recipients, subject,
+                                    build_email_html(lines, n, tier, cfg), dry),
+                 lambda: send_feishu(lines, n, dry, tier, cfg)):
         try:
             send()
         except Exception as e:  # noqa: BLE001 - 通道间互不拖累

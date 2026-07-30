@@ -91,6 +91,13 @@ tr.mo td.m { padding: 14px 0 4px; font-size: 13px; font-weight: 700; color: var(
 footer { margin-top: 18px; font-size: 12px; color: var(--ink-3); line-height: 1.7; }
 footer a { color: var(--ink-2); }
 #err { display: none; background: var(--crit-bg); color: var(--crit-ink); border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-bottom: 10px; }
+.banner {
+  display: block; text-decoration: none; border-radius: 10px; padding: 10px 12px;
+  font-size: 13px; font-weight: 600; margin-bottom: 10px; line-height: 1.5;
+}
+.banner.urgent { background: var(--crit); color: #fff; }
+.banner.notice { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn); }
+.banner small { display: block; font-weight: 400; opacity: .85; }
 </style>
 </head>
 <body>
@@ -101,6 +108,7 @@ footer a { color: var(--ink-2); }
   </header>
   <div class="fresh" id="fresh">加载中…</div>
   <div id="err"></div>
+  <div id="banner"></div>
 
   <div class="cards" id="cards" aria-label="各办事处最早可约摘要"></div>
 
@@ -137,7 +145,15 @@ footer a { color: var(--ink-2); }
 
 <script>
 "use strict";
-var REPO = "chen1111-a/hkid-quota-monitor";
+/* fork 自部署零改码：从 <user>.github.io/<repo>/ 或 jsDelivr /gh/<user>/<repo>@ 自动推导仓库名 */
+var REPO = (function () {
+  var m = location.hostname.match(/^([^.]+)\.github\.io$/);
+  var seg = location.pathname.split("/")[1];
+  if (m && seg) return m[1] + "/" + seg;
+  var j = location.pathname.match(/^\/gh\/([^/]+)\/([^/@]+)/);
+  if (j) return j[1] + "/" + j[2];
+  return "chen1111-a/hkid-quota-monitor";
+})();
 var SUBSCRIBE_EMAIL = "";   // 订阅收件邮箱（配置后订阅区自动出现）
 var FEISHU_GROUP_URL = "";  // 飞书群分享链接（配置后按钮自动出现）
 var OFFICE_SHORT = { FTO: "火炭", RHK: "港岛", RKO: "九龙", RTK: "将军澳", TMO: "屯门", YLO: "元朗" };
@@ -147,7 +163,7 @@ var DATA_URLS = [
   "data/quota.json",
   "https://cdn.jsdelivr.net/gh/" + REPO + "@main/data/quota.json"
 ];
-var state = { data: null, meta: null, hideOffice: {}, onlyOpen: false };
+var state = { data: null, meta: null, cfg: null, hideOffice: {}, onlyOpen: false };
 
 document.getElementById("ghLink").href = "https://github.com/" + REPO;
 
@@ -175,12 +191,15 @@ function fetchData(i) {
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(function (d) {
       state.data = d;
-      // 新鲜度在 meta.json（快照本体不含时间戳）；meta 拉不到不影响主渲染
-      return fetch(DATA_URLS[i].replace("quota.json", "meta.json") + bust,
-                   { cache: "no-store" })
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .catch(function () { return null; })
-        .then(function (m) { state.meta = m; render(); });
+      // meta（新鲜度）与 config（分级提醒阈值）拉不到都不影响主渲染
+      var aux = function (path) {
+        return fetch(DATA_URLS[i].replace("data/quota.json", path) + bust,
+                     { cache: "no-store" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .catch(function () { return null; });
+      };
+      return Promise.all([aux("data/meta.json"), aux("config.json")])
+        .then(function (res) { state.meta = res[0]; state.cfg = res[1]; render(); });
     })
     .catch(function () { fetchData(i + 1); });
 }
@@ -216,6 +235,48 @@ function render() {
   freshEl.innerHTML = "官方数据 <b>" + (meta.source_update_time || d.source_update_time || "?") + "</b>（港时）· 本站检查 " +
     (ageMin === null ? "?" : ageMin <= 0 ? "刚刚" : ageMin + " 分钟前") +
     (ageMin !== null && ageMin > 30 ? ' <span class="stale">⚠ 数据可能滞后</span>' : "");
+
+  /* 分级提醒横幅：紧急/提醒窗口内有名额时显性提示 */
+  var bannerEl = document.getElementById("banner");
+  bannerEl.innerHTML = "";
+  var isIso = function (v) { return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v); };
+  var cfg = {};
+  if (state.cfg) {
+    if (isIso(state.cfg.urgent_before)) cfg.urgent_before = state.cfg.urgent_before;
+    if (isIso(state.cfg.notice_before)) cfg.notice_before = state.cfg.notice_before;
+    if (cfg.urgent_before && cfg.notice_before && cfg.urgent_before > cfg.notice_before) {
+      var tmp = cfg.urgent_before; cfg.urgent_before = cfg.notice_before; cfg.notice_before = tmp;
+    }
+  }
+  if (cfg.urgent_before || cfg.notice_before) {
+    var urgentHits = [], noticeHits = [];
+    d.dates.forEach(function (date) {
+      offices.forEach(function (off) {
+        var c = cellOf(d.quota, off, date);
+        if (!c || (c.best !== "g" && c.best !== "y")) return;
+        var label = (OFFICE_SHORT[off] || off) + " " + date.slice(5).replace("-", "/");
+        if (cfg.urgent_before && date < cfg.urgent_before) urgentHits.push(label);
+        else if (cfg.notice_before && date < cfg.notice_before) noticeHits.push(label);
+      });
+    });
+    var mk = function (cls, text, sub) {
+      var a = document.createElement("a");
+      a.className = "banner " + cls;
+      a.href = "https://system.es2.immd.gov.hk/smartics2-client/ropbooking/zh-CN/eservices/makeAppointment/step1";
+      a.target = "_blank"; a.rel = "noopener";
+      a.innerHTML = text + "<small>" + sub + "</small>";
+      bannerEl.appendChild(a);
+    };
+    if (urgentHits.length) {
+      mk("urgent", "🚨 " + cfg.urgent_before.slice(5).replace("-", "/") + " 前有名额！" +
+        urgentHits.slice(0, 4).join("、") + (urgentHits.length > 4 ? " 等 " + urgentHits.length + " 个" : ""),
+        "点此直达官方预约，手慢无");
+    } else if (noticeHits.length) {
+      mk("notice", "🔔 " + cfg.notice_before.slice(5).replace("-", "/") + " 前有名额：" +
+        noticeHits.slice(0, 4).join("、") + (noticeHits.length > 4 ? " 等 " + noticeHits.length + " 个" : ""),
+        "点此直达官方预约");
+    }
+  }
 
   /* 摘要卡 */
   var cardsEl = document.getElementById("cards");

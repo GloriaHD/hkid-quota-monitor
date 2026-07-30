@@ -76,6 +76,6 @@ jobs:
       - name: Purge jsDelivr cache (mainland mirror freshness)
         if: steps.commit.outputs.changed == 'true'
         run: |
-          for f in index.html data/quota.json data/meta.json data/events.json; do
+          for f in index.html config.json data/quota.json data/meta.json data/events.json; do
             curl -sS -m 20 "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/${f}" || true
           done
