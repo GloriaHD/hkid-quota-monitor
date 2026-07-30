@@ -19,18 +19,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
+      # 浅克隆：数据提交历史每天数百条，全量 clone 会越来越慢
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
-      - name: Install deps
-        run: pip install -q cryptography
-
+      # 抓取先跑：不让依赖安装挡在检测前面（fetch/diff 只用标准库）
       - name: Run quota check
         id: run
         run: python -m quota_monitor.run
+
+      - name: Install deps
+        run: pip install -q cryptography
 
       - name: Process subscriptions (mail-in)
         continue-on-error: true

@@ -28,8 +28,8 @@ HKT = timezone(timedelta(hours=8))
 _STATUS_MAP = {"quota-g": "g", "quota-y": "y", "quota-r": "r"}
 
 
-def fetch_raw() -> dict:
-    """带重试与指数退避地拉取原始 JSON。"""
+def _fetch_once() -> dict:
+    """单次拉取，带重试与指数退避。"""
     url = f"{API_URL}?svcId={SVC_ID}&t={int(time.time() * 1000)}"
     req = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
@@ -46,6 +46,32 @@ def fetch_raw() -> dict:
             if attempt < MAX_RETRIES - 1:
                 time.sleep(2 ** attempt * 2)  # 2s, 4s
     raise RuntimeError(f"配额接口连续 {MAX_RETRIES} 次失败: {last_err}")
+
+
+def _update_ts(raw: dict) -> float:
+    """把 lastUpdateTime 解析成可比较的时间戳，解析不了当作最旧。"""
+    try:
+        return datetime.strptime(raw["lastUpdateTime"], "%m/%d/%Y %H:%M:%S").timestamp()
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+
+
+def fetch_raw(samples: int = 3, gap_sec: float = 3.0) -> dict:
+    """取样多次，采用 lastUpdateTime 最新的一份。
+
+    官方接口是多节点负载均衡，各节点缓存进度不同——实测同一时刻不同节点
+    的数据可差 2 分钟以上（表现为配额格反复横跳）。单次取样有概率打到旧节点，
+    导致我们比别人晚发现放号；取两次挑最新的一份能显著削掉这段落后。"""
+    best = _fetch_once()
+    for _ in range(max(0, samples - 1)):
+        time.sleep(gap_sec)
+        try:
+            cand = _fetch_once()
+        except RuntimeError:
+            break  # 已有一份可用数据，不因补采失败拖垮本轮
+        if _update_ts(cand) > _update_ts(best):
+            best = cand
+    return best
 
 
 def _parse_status(cls: str) -> str:

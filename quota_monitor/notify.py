@@ -294,8 +294,9 @@ def main() -> None:
     full_subject_tier = [tier_of(e["date"], cfg) for e in fresh]
     tier = ("urgent" if "urgent" in full_subject_tier
             else "notice" if "notice" in full_subject_tier else "info")
-    for send in (lambda: send_emails(payloads, dry),
-                 lambda: send_feishu(summarize(fresh), n, dry, tier, cfg)):
+    # 飞书优先：webhook 约 1 秒送达，SMTP 群发要几十秒——抢名额时这段差距是决定性的
+    for send in (lambda: send_feishu(summarize(fresh), n, dry, tier, cfg),
+                 lambda: send_emails(payloads, dry)):
         try:
             send()
         except Exception as e:  # noqa: BLE001 - 通道间互不拖累

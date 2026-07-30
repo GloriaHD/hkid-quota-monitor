@@ -27,7 +27,7 @@ from .diff import diff_snapshots
 
 HKT = timezone(timedelta(hours=8))
 DATA = Path("data")
-MIN_INTERVAL_MIN = 4
+MIN_INTERVAL_MIN = 1.5   # 频率护栏：外部触发器抖动/重叠时的下限
 HEARTBEAT_MIN = 20
 
 
@@ -96,7 +96,7 @@ def main() -> None:
     if os.environ.get("GITHUB_ACTIONS") and prev_meta.get("last_check"):
         elapsed = (now - datetime.fromisoformat(prev_meta["last_check"])).total_seconds() / 60
         if 0 <= elapsed < MIN_INTERVAL_MIN:
-            print(f"skip: last check {elapsed:.1f}min ago (< {MIN_INTERVAL_MIN}min)")
+            print(f"skip: last check {elapsed:.1f}min ago (< {MIN_INTERVAL_MIN}min)")  # noqa: E501
             _set_output(False)
             return
 
