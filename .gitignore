@@ -3,3 +3,4 @@ __pycache__/
 .harness/
 page.html
 script.js
+review-history.jsonl
