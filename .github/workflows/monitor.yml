@@ -35,7 +35,7 @@ jobs:
         run: python -m quota_monitor.run
 
       - name: Install deps
-        run: pip install -q cryptography
+        run: pip install -q -r requirements.txt
 
       - name: Process subscriptions (mail-in)
         continue-on-error: true
