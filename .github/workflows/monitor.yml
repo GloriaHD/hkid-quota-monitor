@@ -60,23 +60,49 @@ jobs:
         run: |
           git config user.name "quota-bot"
           git config user.email "actions@users.noreply.github.com"
-          # 配额内容有变/心跳到期 -> 全量 data/；否则只提交订阅名册和
-          # 通知冷却状态（若有变化），避免纯时间戳提交灌爆仓库
-          if [ "${{ steps.run.outputs.commit }}" = "true" ]; then
-            git add data/
-          else
-            for f in data/subscribers.json.enc data/notify_state.json; do
-              if [ -f "$f" ]; then git add "$f"; fi
-            done
-          fi
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            git commit -m "data: $(date -u +'%Y-%m-%dT%H:%M:%SZ') [skip ci]"
-            git pull --rebase origin main
-            git push
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
+
+          # 本轮是否真的改过这两个有状态的文件（在任何 reset 之前判定）：
+          # 改过 -> 本轮版本更新，应覆盖远端；没改过 -> 保留远端版本，
+          # 避免并发轮次把别人刚登记的订阅者/冷却状态冲掉
+          roster_mine=$(git status --porcelain -- data/subscribers.json.enc)
+          state_mine=$(git status --porcelain -- data/notify_state.json)
+
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          for attempt in 1 2 3; do
+            git fetch -q origin main
+            # 工作区（本轮新数据）原样保留，只把提交基线移到远端最新。
+            # 配额数据是每轮全量重写的快照，不存在需要合并的增量，
+            # 因此「本轮最新者胜」，绝不进 rebase 冲突（2分钟节奏下会频繁撞车）
+            git reset -q --soft origin/main
+            if [ -z "$roster_mine" ]; then
+              git checkout -q origin/main -- data/subscribers.json.enc 2>/dev/null || true
+            fi
+            if [ -z "$state_mine" ]; then
+              git checkout -q origin/main -- data/notify_state.json 2>/dev/null || true
+            fi
+
+            if [ "${{ steps.run.outputs.commit }}" = "true" ]; then
+              git add data/
+            else
+              for f in data/subscribers.json.enc data/notify_state.json; do
+                if [ -f "$f" ]; then git add "$f"; fi
+              done
+            fi
+
+            if git diff --cached --quiet; then
+              echo "nothing to commit"
+              exit 0
+            fi
+            git commit -q -m "data: $(date -u +'%Y-%m-%dT%H:%M:%SZ') [skip ci]"
+            if git push -q origin HEAD:main; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "push raced with another run, retry $attempt"
+            sleep $((attempt * 3))
+          done
+          # 数据提交失败不该让整轮监控判定为失败：抓取与通知都已完成
+          echo "WARN: data commit gave up after retries"
 
       - name: Purge jsDelivr cache (mainland mirror freshness)
         if: steps.commit.outputs.changed == 'true'
