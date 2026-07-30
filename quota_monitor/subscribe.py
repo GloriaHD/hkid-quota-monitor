@@ -32,8 +32,51 @@ ENC_PATH = DATA / "subscribers.json.enc"
 MAX_SUBSCRIBERS = 2000
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
-SUB_WORDS = ("订阅", "SUBSCRIBE", "subscribe")
-UNSUB_WORDS = ("退订", "取消订阅", "UNSUBSCRIBE", "unsubscribe")
+
+# 个性化订阅：中文别名（含繁体）→ 办事处局号
+OFFICE_ALIASES = {
+    "RHK": ("港岛", "港島", "湾仔", "灣仔"),
+    "RKO": ("九龙", "九龍"),
+    "RTK": ("将军澳", "將軍澳"),
+    "FTO": ("火炭",),
+    "TMO": ("屯门", "屯門"),
+    "YLO": ("元朗",),
+}
+OFFICE_CN = {"RHK": "港岛", "RKO": "九龙", "RTK": "将军澳",
+             "FTO": "火炭", "TMO": "屯门", "YLO": "元朗"}
+_DATE_RE = re.compile(r"(20\d{2})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})")
+
+
+def parse_prefs(text: str) -> dict:
+    """从订阅邮件文本解析个性化偏好。看不懂的一律回退全量订阅——
+    绝不因用户写法而丢订阅。
+
+    - offices: 文本中提到的办事处（全部 6 个都提到 = 不过滤，兼容模板默认全清单）
+    - before : 截止日期，只要这天之前的名额（支持 2026-10-15 / 2026/10/15 / 2026年10月15日）
+    """
+    prefs: dict = {}
+    hits = [oid for oid, names in OFFICE_ALIASES.items()
+            if any(n in text for n in names)]
+    if hits and len(hits) < len(OFFICE_ALIASES):
+        prefs["offices"] = sorted(hits)
+    m = _DATE_RE.search(text)
+    if m:
+        try:
+            from datetime import date
+            prefs["before"] = date(int(m[1]), int(m[2]), int(m[3])).isoformat()
+        except ValueError:
+            pass
+    return prefs
+
+
+def describe_prefs(prefs: dict) -> str:
+    """把偏好翻译成人话，确认信里回显给用户核对。"""
+    parts = []
+    if prefs.get("offices"):
+        parts.append("只看：" + "、".join(OFFICE_CN.get(o, o) for o in prefs["offices"]))
+    if prefs.get("before"):
+        parts.append(f"只要 {prefs['before']} 之前的名额")
+    return "；".join(parts) if parts else "全部办事处、全部日期"
 
 # fork 自部署时链接自动指向自己的仓库（CI 注入 GITHUB_REPOSITORY）
 _REPO = os.environ.get("GITHUB_REPOSITORY", "chen1111-a/hkid-quota-monitor")
@@ -62,37 +105,70 @@ def _strip_quoted(body: str) -> str:
     return "\n".join(kept)
 
 
+_NOREPLY_LOCALS = {"noreply", "no-reply", "donotreply", "do-not-reply", "bounce",
+                   "mailer-daemon", "postmaster", "notify", "notifications",
+                   "news", "newsletter", "hello", "info", "support"}
+
+
+def is_machine_sender(addr: str) -> bool:
+    """营销/系统邮件的典型发件地址——不当订阅者处理。
+    实测收件箱会收到正文含 subscribe/unsubscribe 的英文机器邮件，
+    不挡会把 noreply@ 之类登记进名册（确认信还会被退回）。"""
+    return addr.split("@", 1)[0].lower() in _NOREPLY_LOCALS
+
+
 def classify(subject: str, body: str) -> str | None:
     """'subscribe' / 'unsubscribe' / None。
 
-    主题优先于正文（正文只看非引用部分）；同一层级内退订词优先
-    （"取消订阅"同时含两类词）。"""
+    中文关键词：主题优先于正文（正文只看非引用部分），退订词优先
+    （"取消订阅"同时含两类词）。英文关键词只接受主题精确匹配——
+    英文营销邮件正文几乎必含 unsubscribe/subscribe 字样，模糊匹配会误登记。"""
+    low = subject.strip().lower()
+    if low == "unsubscribe":
+        return "unsubscribe"
+    if low == "subscribe":
+        return "subscribe"
     for text in (subject, _strip_quoted(body)):
-        if any(w in text for w in UNSUB_WORDS):
+        if any(w in text for w in ("退订", "取消订阅")):
             return "unsubscribe"
-        if any(w in text for w in SUB_WORDS):
+        if "订阅" in text:
             return "subscribe"
     return None
 
 
 def apply_change(subs: list[dict], addr: str, action: str,
-                 now_iso: str) -> tuple[list[dict], bool]:
-    """幂等更新名册。返回 (新名册, 是否发生变化)。"""
+                 now_iso: str, prefs: dict | None = None) -> tuple[list[dict], bool]:
+    """幂等更新名册。返回 (新名册, 是否发生变化)。
+    重发订阅邮件 = 更新个性化偏好（prefs 总是覆盖为本次邮件解析结果）。"""
     addr = addr.strip().lower()
+    prefs = prefs or {}
     if not EMAIL_RE.match(addr):
         return subs, False
     existing = next((s for s in subs if s.get("email") == addr), None)
+
+    def _set_prefs(rec: dict) -> None:
+        for k in ("offices", "before"):
+            if prefs.get(k):
+                rec[k] = prefs[k]
+            else:
+                rec.pop(k, None)
+
     if action == "subscribe":
         if existing:
-            if existing.get("active", True):
+            same_prefs = (existing.get("offices") == prefs.get("offices")
+                          and existing.get("before") == prefs.get("before"))
+            if existing.get("active", True) and same_prefs:
                 return subs, False
             existing["active"] = True
+            _set_prefs(existing)
             existing["updated"] = now_iso
             return subs, True
         if len([s for s in subs if s.get("active", True)]) >= MAX_SUBSCRIBERS:
             print(f"WARN roster full ({MAX_SUBSCRIBERS}), rejected {addr}")
             return subs, False
-        subs.append({"email": addr, "active": True, "updated": now_iso})
+        rec = {"email": addr, "active": True, "updated": now_iso}
+        _set_prefs(rec)
+        subs.append(rec)
         return subs, True
     if existing and existing.get("active", True):
         existing["active"] = False
@@ -156,10 +232,14 @@ def _body_text(msg: email.message.Message) -> str:
     return ""
 
 
-def send_confirmation(user: str, pwd: str, addr: str, action: str, dry: bool) -> None:
+def send_confirmation(user: str, pwd: str, addr: str, action: str, dry: bool,
+                      prefs_desc: str = "") -> None:
     if action == "subscribe":
         subject = "✅ 订阅成功：香港ID预约放号提醒"
-        html = (f"<p>订阅成功！之后任一办事处放出预约名额，会第一时间邮件通知你。</p>"
+        scope = prefs_desc or "全部办事处、全部日期"
+        html = (f"<p>订阅成功！你的订阅范围：<b>{scope}</b>。"
+                f"范围内一有名额放出，会第一时间邮件通知你。</p>"
+                f"<p>想调整范围：重发一封订阅邮件写上新需求即可（如「订阅 只看港岛 九龙 2026-10-15之前」）。</p>"
                 f"<p>实时看板：<a href='{DASHBOARD}'>{DASHBOARD}</a></p>"
                 f"<p style='color:#999;font-size:12px'>想停止提醒：给本邮箱另发一封主题为「退订」的新邮件即可。"
                 f"第三方公益工具，非入境处官方服务。</p>")
@@ -212,14 +292,19 @@ def main() -> None:
                 msg = email.message_from_bytes(msg_data[0][1])
                 addr = parseaddr(msg.get("From", ""))[1].lower()
                 subject = _decode_header(msg.get("Subject", ""))
-                action = classify(subject, _body_text(msg))
-                if action and EMAIL_RE.match(addr) and addr != user.lower():
-                    subs, did = apply_change(subs, addr, action, now_iso)
+                body = _body_text(msg)
+                action = classify(subject, body)
+                if (action and EMAIL_RE.match(addr) and addr != user.lower()
+                        and not is_machine_sender(addr)):
+                    prefs = (parse_prefs(subject + "\n" + _strip_quoted(body))
+                             if action == "subscribe" else {})
+                    subs, did = apply_change(subs, addr, action, now_iso, prefs)
                     if did:
                         save_roster(subs)  # 即时保存，每封独立生效
                         n_changed += 1
                         try:
-                            send_confirmation(user, pwd, addr, action, dry)
+                            send_confirmation(user, pwd, addr, action, dry,
+                                              describe_prefs(prefs))
                         except Exception as e:  # noqa: BLE001 - 确认信失败不影响登记
                             print(f"WARN confirm mail failed for {addr}: {e}")
             except Exception as e:  # noqa: BLE001

@@ -6,7 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from quota_monitor.notify import filter_events, load_alert_cfg, summarize, tier_of
+from quota_monitor.notify import (event_matches, filter_events, load_alert_cfg,
+                                  summarize, tier_of)
 
 HKT = timezone(timedelta(hours=8))
 T0 = datetime(2026, 7, 30, 12, 0, tzinfo=HKT)
@@ -98,6 +99,16 @@ def test_load_alert_cfg_untrusted_input():
     assert load_alert_cfg(_cfg_file("t5.json",
         '{"urgent_before": "2026-09-15", "notice_before": "2026-09-01"}')) == \
         {"urgent_before": "2026-09-01", "notice_before": "2026-09-15"}         # 填反自动对调
+
+
+def test_event_matches_personalization():
+    e = ev(office="RHK", date="2026-09-08")
+    assert event_matches({}, e)                                    # 旧记录=全量
+    assert event_matches({"offices": ["RHK", "RKO"]}, e)
+    assert not event_matches({"offices": ["TMO"]}, e)
+    assert event_matches({"before": "2026-09-09"}, e)
+    assert not event_matches({"before": "2026-09-08"}, e)          # 边界：等于截止日不算
+    assert not event_matches({"offices": ["RHK"], "before": "2026-09-01"}, e)
 
 
 if __name__ == "__main__":

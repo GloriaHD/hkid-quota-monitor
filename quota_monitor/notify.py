@@ -123,8 +123,9 @@ def summarize(events: list[dict]) -> list[str]:
     return lines
 
 
-def load_subscribers() -> list[str]:
-    """解密订阅者列表（Phase 5 产物）。文件或密钥缺失返回空表。"""
+def load_subscribers() -> list[dict]:
+    """解密订阅者列表（含个性化偏好）。文件或密钥缺失返回空表。
+    旧记录无 offices/before 字段 = 全量订阅（向后兼容）。"""
     key = os.environ.get("SUBSCRIBER_KEY", "")
     enc = DATA / "subscribers.json.enc"
     if not key or not enc.exists():
@@ -133,10 +134,35 @@ def load_subscribers() -> list[str]:
         from cryptography.fernet import Fernet
         raw = Fernet(key.encode()).decrypt(enc.read_bytes())
         subs = json.loads(raw)
-        return [s["email"] for s in subs if s.get("email") and s.get("active", True)]
+        return [{"email": s["email"], "offices": s.get("offices"),
+                 "before": s.get("before")}
+                for s in subs if s.get("email") and s.get("active", True)]
     except Exception as e:  # noqa: BLE001 - 订阅表坏了不该阻塞管理员通知
         print(f"WARN subscribers decrypt failed: {e}")
         return []
+
+
+def event_matches(sub: dict, e: dict) -> bool:
+    """个性化过滤：订阅者未设的维度不过滤。"""
+    if sub.get("offices") and e["office"] not in sub["offices"]:
+        return False
+    if sub.get("before") and e["date"] >= sub["before"]:
+        return False
+    return True
+
+
+def compose(events: list[dict], cfg: dict) -> tuple[str, str]:
+    """一组事件 -> (邮件主题, 邮件 HTML)。分级取组内最高档。"""
+    lines = summarize(events)
+    tiers = [tier_of(e["date"], cfg) for e in events]
+    tier = "urgent" if "urgent" in tiers else "notice" if "notice" in tiers else "info"
+    n_top = tiers.count(tier)
+    subject = {
+        "urgent": f"🚨 紧急放号：{cfg.get('urgent_before', '近期')} 前有名额！（{n_top} 个）",
+        "notice": f"🔔 香港ID放号：{len(events)} 个名额（含 {cfg.get('notice_before', '近期')} 前）",
+        "info": f"🎫 香港ID预约放号：{len(events)} 个名额",
+    }[tier]
+    return subject, build_email_html(lines, len(events), tier, cfg)
 
 
 def build_email_html(lines: list[str], n: int, tier: str = "info",
@@ -162,26 +188,25 @@ def build_email_html(lines: list[str], n: int, tier: str = "info",
 第三方公益工具，非入境处官方服务。想停止提醒：给本邮箱另发一封主题为「退订」的新邮件即可。</p></div>"""
 
 
-def send_email(recipients: list[str], subject: str, html: str, dry: bool) -> None:
+def send_emails(payloads: list[tuple[str, str, str]], dry: bool) -> None:
+    """发送 (收件人, 主题, HTML) 列表——逐人独立内容（个性化）也逐人独立容错。"""
     user = os.environ.get("QQ_SMTP_USER", "")
     pwd = os.environ.get("QQ_SMTP_PASS", "")
-    if not recipients:
+    if not payloads:
         print("skip email: no recipients")
         return
     if dry or not user or not pwd:
-        print(f"[DRY] email -> {len(recipients)} 人: {subject}")
+        for rcpt, subject, _ in payloads:
+            print(f"[DRY] email -> {rcpt}: {subject}")
         return
-    msg = MIMEText(html, "html", "utf-8")
-    msg["Subject"] = Header(subject, "utf-8")
-    msg["From"] = formataddr((str(Header("香港ID配额监控", "utf-8")), user))
     sent = failed = 0
     with smtplib.SMTP("smtp.qq.com", 587, timeout=30) as s:
         s.starttls(context=ssl.create_default_context())
         s.login(user, pwd)
-        # 逐封独立收件（BCC 语义），避免暴露订阅者列表；
-        # 单收件人被拒不许中断其余人的通知
-        for rcpt in recipients:
-            del msg["To"]
+        for rcpt, subject, html in payloads:
+            msg = MIMEText(html, "html", "utf-8")
+            msg["Subject"] = Header(subject, "utf-8")
+            msg["From"] = formataddr((str(Header("香港ID配额监控", "utf-8")), user))
             msg["To"] = rcpt
             try:
                 s.sendmail(user, [rcpt], msg.as_string())
@@ -239,14 +264,7 @@ def main() -> None:
         print("skip: no notify-worthy events after cooldown filter")
         return
 
-    lines = summarize(fresh)
     n = len(fresh)
-    recipients = []
-    admin = os.environ.get("ADMIN_EMAIL", "")
-    if admin:
-        recipients.append(admin)
-    recipients += [r for r in load_subscribers() if r not in recipients]
-
     # 冷却状态先落盘再发送：单通道抛异常时另一通道已发出的通知
     # 不会因 state 丢失而在下一轮重复轰炸（宁可漏一轮，不可炸订阅者）
     prune_state(state)
@@ -254,21 +272,35 @@ def main() -> None:
                           encoding="utf-8")
 
     cfg = load_alert_cfg()
-    tiers = [tier_of(e["date"], cfg) for e in fresh]
-    tier = "urgent" if "urgent" in tiers else "notice" if "notice" in tiers else "info"
-    n_top = tiers.count(tier)
-    subject = {"urgent": f"🚨 紧急放号：{cfg.get('urgent_before', '近期')} 前有名额！（{n_top} 个）",
-               "notice": f"🔔 香港ID放号：{n} 个名额（含 {cfg.get('notice_before', '近期')} 前）",
-               "info": f"🎫 香港ID预约放号：{n} 个名额"}[tier]
+    # 逐人个性化：管理员收全量；订阅者只收自己偏好范围内的事件，无匹配不打扰
+    payloads: list[tuple[str, str, str]] = []
+    admin = os.environ.get("ADMIN_EMAIL", "").lower()
+    if admin:
+        subject, html = compose(fresh, cfg)
+        payloads.append((admin, subject, html))
+    skipped = 0
+    for sub in load_subscribers():
+        if sub["email"] == admin:
+            continue  # 管理员已收全量
+        sub_ev = [e for e in fresh if event_matches(sub, e)]
+        if not sub_ev:
+            skipped += 1
+            continue
+        subject, html = compose(sub_ev, cfg)
+        payloads.append((sub["email"], subject, html))
+    if skipped:
+        print(f"personalized: {skipped} subscribers had no matching events")
 
-    for send in (lambda: send_email(recipients, subject,
-                                    build_email_html(lines, n, tier, cfg), dry),
-                 lambda: send_feishu(lines, n, dry, tier, cfg)):
+    full_subject_tier = [tier_of(e["date"], cfg) for e in fresh]
+    tier = ("urgent" if "urgent" in full_subject_tier
+            else "notice" if "notice" in full_subject_tier else "info")
+    for send in (lambda: send_emails(payloads, dry),
+                 lambda: send_feishu(summarize(fresh), n, dry, tier, cfg)):
         try:
             send()
         except Exception as e:  # noqa: BLE001 - 通道间互不拖累
             print(f"WARN notify channel failed: {e}")
-    print(f"OK notified={n} cells")
+    print(f"OK notified={n} cells, {len(payloads)} emails")
 
 
 if __name__ == "__main__":

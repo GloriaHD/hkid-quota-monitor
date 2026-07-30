@@ -384,7 +384,15 @@ document.getElementById("onlyOpen").onchange = function () {
   document.getElementById("subArea").innerHTML =
     '<div class="subCard"><p>放号往往几分钟内被抢完——订阅后第一时间提醒你</p>' +
     '<div class="subBtns">' + btns.join("") + "</div>" +
-    (SUBSCRIBE_EMAIL ? '<div class="subHint">点按钮发送一封邮件即完成订阅（全程国内网络直连），约 5 分钟内收到确认邮件</div>' : "") +
+    (SUBSCRIBE_EMAIL ? '<div class="subHint">点按钮发送一封邮件即完成订阅（全程国内网络直连），约 5 分钟内收到确认邮件</div>' +
+      '<div class="subHint"><a style="color:var(--accent);text-decoration:none" href="mailto:' + SUBSCRIBE_EMAIL +
+      "?subject=" + encodeURIComponent("订阅香港ID放号提醒") +
+      "&body=" + encodeURIComponent(
+        "订阅香港ID放号提醒（个性化）。\n" +
+        "只看办事处：港岛 九龙 将军澳 火炭 屯门 元朗 ←把不要的删掉\n" +
+        "只要这天之前的名额：2027-12-31 ←改成你的截止日期\n" +
+        "（两行都不改 = 订阅全部）") +
+      '">🎯 想只看特定办事处或日期？点此个性化订阅（DIY）</a></div>' : "") +
     "</div>";
 })();
 
