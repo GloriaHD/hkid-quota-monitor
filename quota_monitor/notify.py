@@ -35,7 +35,7 @@ STATUS_TEXT = {"g": "充足", "y": "少量"}
 REPO = os.environ.get("GITHUB_REPOSITORY", "chen1111-a/hkid-quota-monitor")
 _OWNER, _NAME = REPO.split("/", 1)
 DASHBOARD = f"https://{_OWNER}.github.io/{_NAME}/"
-BOOKING = "https://www.immd.gov.hk/hks/services/hkid/registration_appointment_booking.html"
+BOOKING = "https://system.es2.immd.gov.hk/smartics2-client/ropbooking/zh-CN/eservices/ropChangeCancelAppointment/step1"
 
 
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -156,7 +156,7 @@ def build_email_html(lines: list[str], n: int, tier: str = "info",
 <p style="color:#666;margin:0 0 12px">香港入境处智能身份证预约（检测时间 {_now().strftime('%m-%d %H:%M')} 港时）</p>
 <ul style="padding-left:18px">{items}</ul>
 <p style="margin:16px 0">
-<a href="{BOOKING}" style="background:#0b57d0;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">立即去官方预约</a>
+<a href="{BOOKING}" style="background:#0b57d0;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">立即去官方预约/改期</a>
 &nbsp;<a href="{DASHBOARD}" style="color:#0b57d0">查看实时看板</a></p>
 <p style="color:#999;font-size:12px;line-height:1.6">名额变动很快，以官方预约页实际为准。<br>
 第三方公益工具，非入境处官方服务。想停止提醒：给本邮箱另发一封主题为「退订」的新邮件即可。</p></div>"""
