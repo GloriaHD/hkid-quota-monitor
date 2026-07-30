@@ -81,6 +81,13 @@ tr.mo td.m { padding: 14px 0 4px; font-size: 13px; font-weight: 700; color: var(
 .btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
 .btn.plain { color: var(--ink-2); background: var(--card); }
 #subArea { margin-top: 10px; }
+.subCard {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px; text-align: center;
+}
+.subCard p { margin: 0 0 10px; font-size: 13px; color: var(--ink-2); }
+.subBtns { display: flex; gap: 8px; }
+.subHint { font-size: 11px; color: var(--ink-3); margin-top: 8px; }
 footer { margin-top: 18px; font-size: 12px; color: var(--ink-3); line-height: 1.7; }
 footer a { color: var(--ink-2); }
 #err { display: none; background: var(--crit-bg); color: var(--crit-ink); border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-bottom: 10px; }
@@ -131,6 +138,8 @@ footer a { color: var(--ink-2); }
 <script>
 "use strict";
 var REPO = "chen1111-a/hkid-quota-monitor";
+var SUBSCRIBE_EMAIL = "";   // 订阅收件邮箱（配置后订阅区自动出现）
+var FEISHU_GROUP_URL = "";  // 飞书群分享链接（配置后按钮自动出现）
 var OFFICE_SHORT = { FTO: "火炭", RHK: "港岛", RKO: "九龙", RTK: "将军澳", TMO: "屯门", YLO: "元朗" };
 var OFFICE_ORDER = ["RHK", "RKO", "RTK", "FTO", "TMO", "YLO"];
 var WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
@@ -262,6 +271,27 @@ function render() {
 document.getElementById("onlyOpen").onchange = function () {
   state.onlyOpen = this.checked; render();
 };
+
+/* ---------- 订阅区（内地直连：发邮件即订阅，无需科学上网） ---------- */
+(function () {
+  if (!SUBSCRIBE_EMAIL && !FEISHU_GROUP_URL) return;
+  var btns = [];
+  if (SUBSCRIBE_EMAIL) {
+    btns.push('<a class="btn primary" style="flex:1" href="mailto:' + SUBSCRIBE_EMAIL +
+      "?subject=" + encodeURIComponent("订阅香港ID放号提醒") +
+      "&body=" + encodeURIComponent("发送此邮件即完成订阅，无需修改内容。退订时回复「退订」即可。") +
+      '">📮 邮件订阅放号提醒</a>');
+  }
+  if (FEISHU_GROUP_URL) {
+    btns.push('<a class="btn plain" style="flex:1" target="_blank" rel="noopener" href="' +
+      FEISHU_GROUP_URL + '">加入飞书通知群</a>');
+  }
+  document.getElementById("subArea").innerHTML =
+    '<div class="subCard"><p>放号往往几分钟内被抢完——订阅后第一时间提醒你</p>' +
+    '<div class="subBtns">' + btns.join("") + "</div>" +
+    (SUBSCRIBE_EMAIL ? '<div class="subHint">点按钮发送一封邮件即完成订阅（全程国内网络直连），约 5 分钟内收到确认邮件</div>' : "") +
+    "</div>";
+})();
 
 /* 每 5 分钟自动刷新；切回前台也刷新 */
 fetchData();

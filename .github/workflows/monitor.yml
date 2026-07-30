@@ -28,6 +28,28 @@ jobs:
       - name: Run quota check
         run: python -m quota_monitor.run
 
+      - name: Process subscriptions (mail-in)
+        continue-on-error: true
+        env:
+          QQ_SMTP_USER: ${{ secrets.QQ_SMTP_USER }}
+          QQ_SMTP_PASS: ${{ secrets.QQ_SMTP_PASS }}
+          SUBSCRIBER_KEY: ${{ secrets.SUBSCRIBER_KEY }}
+        run: |
+          pip install -q cryptography
+          python -m quota_monitor.subscribe
+
+      - name: Send notifications
+        continue-on-error: true
+        env:
+          QQ_SMTP_USER: ${{ secrets.QQ_SMTP_USER }}
+          QQ_SMTP_PASS: ${{ secrets.QQ_SMTP_PASS }}
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          SUBSCRIBER_KEY: ${{ secrets.SUBSCRIBER_KEY }}
+        run: |
+          pip install -q cryptography
+          python -m quota_monitor.notify
+
       - name: Commit data if changed
         id: commit
         run: |
