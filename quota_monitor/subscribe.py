@@ -37,7 +37,8 @@ UNSUB_WORDS = ("退订", "取消订阅", "UNSUBSCRIBE", "unsubscribe")
 
 # fork 自部署时链接自动指向自己的仓库（CI 注入 GITHUB_REPOSITORY）
 _REPO = os.environ.get("GITHUB_REPOSITORY", "chen1111-a/hkid-quota-monitor")
-DASHBOARD = f"https://cdn.jsdelivr.net/gh/{_REPO}@main/index.html"
+_OWNER, _NAME = _REPO.split("/", 1)
+DASHBOARD = f"https://{_OWNER}.github.io/{_NAME}/"
 
 
 _QUOTE_MARKERS = re.compile(

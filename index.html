@@ -7,57 +7,114 @@
 <meta name="description" content="香港入境处智能身份证预约配额实时监控：5分钟级检测六大办事处放号情况（第三方工具，非官方）">
 <style>
 :root {
-  --bg: #fcfcfb; --card: #ffffff; --ink: #1c1c1a; --ink-2: #5f5e5a; --ink-3: #92918c;
-  --line: #e7e6e2; --accent: #0b57d0;
+  --bg: #070b12; --bg-glow: rgba(57, 208, 255, .04);
+  --card: #0d141f; --card-2: #101a28; --ink: #d9e6f2; --ink-2: #8da3ba; --ink-3: #55677c;
+  --line: #1a2636; --line-hi: #24405c; --accent: #39d0ff; --accent-dim: rgba(57, 208, 255, .14);
   --good: #0ca30c; --warn: #fab219; --crit: #d03b3b;
-  --good-bg: rgba(12,163,12,.13); --warn-bg: rgba(250,178,25,.18); --crit-bg: rgba(208,59,59,.07);
-  --good-ink: #006300; --warn-ink: #6b4a00; --crit-ink: #a04545;
+  --good-bg: rgba(18, 200, 90, .13); --warn-bg: rgba(250, 178, 25, .13); --crit-bg: rgba(208, 59, 59, .10);
+  --good-ink: #4ade80; --warn-ink: #fbc44d; --crit-ink: #e88;
+  --glow: 0 0 14px rgba(57, 208, 255, .18);
 }
-:root[data-theme="dark"] {
-  --bg: #1a1a19; --card: #232322; --ink: #eceae6; --ink-2: #a6a49e; --ink-3: #6f6e69;
-  --line: #373633; --accent: #8ab4f8;
-  --good-bg: rgba(12,163,12,.22); --warn-bg: rgba(250,178,25,.20); --crit-bg: rgba(208,59,59,.13);
-  --good-ink: #6fd66f; --warn-ink: #fac95e; --crit-ink: #e08a8a;
+:root[data-theme="light"] {
+  --bg: #f4f7fa; --bg-glow: transparent;
+  --card: #ffffff; --card-2: #f0f4f8; --ink: #17222e; --ink-2: #52667a; --ink-3: #8194a8;
+  --line: #dde5ec; --line-hi: #b8cbdc; --accent: #0b78c2; --accent-dim: rgba(11, 120, 194, .10);
+  --good-bg: rgba(12, 163, 12, .12); --warn-bg: rgba(250, 178, 25, .18); --crit-bg: rgba(208, 59, 59, .08);
+  --good-ink: #067006; --warn-ink: #6b4a00; --crit-ink: #a04545;
+  --glow: none;
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
-  margin: 0; background: var(--bg); color: var(--ink);
+  margin: 0; color: var(--ink);
+  background: var(--bg);
+  background-image:
+    radial-gradient(1100px 500px at 50% -10%, var(--bg-glow), transparent),
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: auto, 44px 44px, 44px 44px;
+  background-attachment: fixed;
   font: 15px/1.55 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 }
-.wrap { max-width: 720px; margin: 0 auto; padding: 12px 12px calc(28px + env(safe-area-inset-bottom)); }
-header { display: flex; align-items: center; gap: 8px; padding: 6px 2px 2px; }
-header h1 { font-size: 19px; margin: 0; flex: 1; letter-spacing: .01em; }
-#themeBtn {
-  border: 1px solid var(--line); background: var(--card); color: var(--ink-2);
-  border-radius: 8px; padding: 4px 10px; font-size: 13px; cursor: pointer;
+:root[data-theme="light"] body { background-image: none; }
+.wrap { max-width: 760px; margin: 0 auto; padding: 14px 12px calc(30px + env(safe-area-inset-bottom)); }
+
+header { display: flex; align-items: center; gap: 10px; padding: 4px 2px 2px; }
+.live {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--good-ink);
+  box-shadow: 0 0 8px var(--good-ink); animation: pulse 2.2s infinite;
 }
-.fresh { font-size: 12px; color: var(--ink-3); padding: 2px 2px 10px; }
-.fresh b { color: var(--ink-2); font-weight: 600; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+header h1 { font-size: 19px; margin: 0; flex: 1; letter-spacing: .02em; }
+header h1 small { display: block; font-size: 9px; font-weight: 500; color: var(--ink-3); letter-spacing: .18em; white-space: nowrap; overflow: hidden; }
+#themeBtn {
+  border: 1px solid var(--line-hi); background: transparent; color: var(--ink-2);
+  border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  transition: border-color .2s, color .2s;
+}
+#themeBtn:hover { border-color: var(--accent); color: var(--ink); }
+.fresh { font-size: 12px; color: var(--ink-3); padding: 4px 2px 6px; }
+.fresh b { color: var(--ink-2); font-weight: 600; font-variant-numeric: tabular-nums; }
 .stale { color: var(--crit-ink); font-weight: 600; }
+
+/* 调度自证：直读 GitHub Actions 公开审计记录 */
+#proof { display: none; }
+.proof {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
+  border: 1px solid var(--line); border-left: 2px solid var(--accent);
+  background: linear-gradient(90deg, var(--accent-dim), transparent 55%);
+  border-radius: 8px; padding: 7px 10px; margin-bottom: 10px;
+  font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums;
+}
+.proof .ticks { letter-spacing: 2px; font-weight: 700; }
+.proof .ok { color: var(--good-ink); } .proof .bad { color: var(--crit-ink); }
+.proof a { color: var(--accent); text-decoration: none; margin-left: auto; }
+
+.banner {
+  display: block; text-decoration: none; border-radius: 10px; padding: 11px 13px;
+  font-size: 13px; font-weight: 600; margin-bottom: 10px; line-height: 1.5;
+}
+.banner.urgent {
+  background: var(--crit); color: #fff;
+  box-shadow: 0 0 18px rgba(208, 59, 59, .45); animation: pulse 1.6s infinite;
+}
+.banner.notice { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn); }
+.banner small { display: block; font-weight: 400; opacity: .85; }
 
 .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
 .card {
-  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  min-width: 0;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
   padding: 9px 10px 8px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04), 0 4px 14px rgba(0, 0, 0, .30);
+  transition: border-color .2s cubic-bezier(.4, 0, .2, 1), transform .2s cubic-bezier(.4, 0, .2, 1), opacity .2s;
 }
-.card.off { opacity: .38; }
+.card:hover { border-color: var(--line-hi); transform: translateY(-1px); }
+.card:active { transform: scale(.97); }
+:root[data-theme="light"] .card { box-shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 4px 16px rgba(0, 0, 0, .06); }
+.card.off { opacity: .35; }
 .card .nm { font-size: 13px; font-weight: 600; }
-.card .st { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+.card .st { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .st.has { color: var(--good-ink); font-weight: 600; }
 
 .ctrl { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); cursor: pointer; user-select: none; }
 .toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
-.legend { margin-left: auto; display: flex; gap: 8px; font-size: 12px; color: var(--ink-2); flex-wrap: wrap; }
+.legend { margin-left: auto; display: flex; gap: 8px; font-size: 12px; color: var(--ink-2); flex-wrap: wrap; align-items: center; }
 .legend i { font-style: normal; padding: 0 5px; border-radius: 4px; font-size: 11px; }
 
+.tblcard {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 6px 8px 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04), 0 6px 20px rgba(0, 0, 0, .30);
+}
+:root[data-theme="light"] .tblcard { box-shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 4px 16px rgba(0, 0, 0, .06); }
 table { width: 100%; border-collapse: separate; border-spacing: 2px; table-layout: fixed; }
 col.dcol { width: 64px; }
 thead th {
-  position: sticky; top: 0; z-index: 2; background: var(--bg);
-  font-size: 11px; color: var(--ink-2); font-weight: 600; padding: 6px 0 5px;
-  white-space: nowrap; overflow: hidden;
+  position: sticky; top: 0; z-index: 2; background: var(--card);
+  font-size: 11px; color: var(--accent); font-weight: 600; padding: 7px 0 6px;
+  white-space: nowrap; overflow: hidden; letter-spacing: .06em;
+  border-bottom: 1px solid var(--line-hi);
 }
 td.d {
   font-size: 11px; color: var(--ink-2); white-space: nowrap; padding-right: 2px;
@@ -65,21 +122,25 @@ td.d {
 }
 td.d .wd { color: var(--ink-3); margin-left: 3px; }
 td.d.we, td.d.we .wd { color: var(--warn-ink); }
-td.q { text-align: center; font-size: 12px; border-radius: 6px; padding: 5px 0; min-width: 34px; }
+td.q { text-align: center; font-size: 12px; border-radius: 5px; padding: 5px 0; }
 td.g { background: var(--good-bg); color: var(--good-ink); font-weight: 700; }
 td.y { background: var(--warn-bg); color: var(--warn-ink); font-weight: 700; }
-td.r { background: var(--crit-bg); color: var(--crit-ink); }
+td.r { background: var(--crit-bg); color: var(--crit-ink); opacity: .75; }
 td.x { color: var(--ink-3); }
-tr.mo td.m { padding: 14px 0 4px; font-size: 13px; font-weight: 700; color: var(--ink); }
+tr.mo td.m { padding: 13px 2px 4px; font-size: 12px; font-weight: 700; color: var(--accent); letter-spacing: .12em; }
 
 .empty { text-align: center; color: var(--ink-3); padding: 40px 0; font-size: 14px; }
 .actions { display: flex; gap: 8px; margin: 14px 0 4px; }
 .btn {
-  flex: 1; text-align: center; text-decoration: none; border-radius: 10px; padding: 10px 0;
-  font-size: 14px; font-weight: 600; border: 1px solid var(--line);
+  flex: 1; text-align: center; text-decoration: none; border-radius: 10px; padding: 11px 0;
+  font-size: 14px; font-weight: 600; border: 1px solid var(--line-hi);
+  transition: box-shadow .2s cubic-bezier(.4, 0, .2, 1), transform .2s cubic-bezier(.4, 0, .2, 1), border-color .2s;
 }
-.btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+.btn:active { transform: scale(.98); }
+.btn.primary { background: var(--accent); color: #04121c; border-color: transparent; box-shadow: var(--glow); }
+.btn.primary:hover { box-shadow: 0 0 22px rgba(57, 208, 255, .38); transform: translateY(-1px); }
 .btn.plain { color: var(--ink-2); background: var(--card); }
+.btn.plain:hover { border-color: var(--accent); color: var(--ink); }
 #subArea { margin-top: 10px; }
 .subCard {
   background: var(--card); border: 1px solid var(--line); border-radius: 12px;
@@ -91,22 +152,26 @@ tr.mo td.m { padding: 14px 0 4px; font-size: 13px; font-weight: 700; color: var(
 footer { margin-top: 18px; font-size: 12px; color: var(--ink-3); line-height: 1.7; }
 footer a { color: var(--ink-2); }
 #err { display: none; background: var(--crit-bg); color: var(--crit-ink); border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-bottom: 10px; }
-.banner {
-  display: block; text-decoration: none; border-radius: 10px; padding: 10px 12px;
-  font-size: 13px; font-weight: 600; margin-bottom: 10px; line-height: 1.5;
+
+@media (min-width: 720px) {
+  .wrap { max-width: 880px; padding-top: 22px; }
+  header h1 { font-size: 22px; }
+  .cards { grid-template-columns: repeat(6, 1fr); }
+  td.q { font-size: 13px; padding: 6px 0; }
+  col.dcol { width: 88px; }
+  td.d, thead th { font-size: 12px; }
 }
-.banner.urgent { background: var(--crit); color: #fff; }
-.banner.notice { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn); }
-.banner small { display: block; font-weight: 400; opacity: .85; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>香港身份证预约配额看板</h1>
+    <div class="live" aria-hidden="true"></div>
+    <h1>香港身份证预约配额看板<small>HKID QUOTA MONITOR · 5-MIN WATCH</small></h1>
     <button id="themeBtn" aria-label="切换深浅主题">主题</button>
   </header>
   <div class="fresh" id="fresh">加载中…</div>
+  <div id="proof" class="proof"></div>
   <div id="err"></div>
   <div id="banner"></div>
 
@@ -122,19 +187,21 @@ footer a { color: var(--ink-2); }
     </div>
   </div>
 
+  <div class="tblcard">
   <table id="tbl" aria-label="配额矩阵：行=日期，列=办事处">
     <colgroup id="cg"></colgroup>
     <thead><tr id="thr"></tr></thead>
     <tbody id="tb"></tbody>
   </table>
   <div class="empty" id="empty" style="display:none">当前筛选下没有可约名额，订阅通知蹲守放号 ↓</div>
+  </div>
 
   <div class="actions">
     <a class="btn primary" target="_blank" rel="noopener"
-       href="https://system.es2.immd.gov.hk/smartics2-client/ropbooking/zh-CN/eservices/makeAppointment/step1">去官方预约</a>
+       href="https://www.immd.gov.hk/hks/services/hkid/registration_appointment_booking.html">去官方预约入口</a>
     <a class="btn plain" id="ghLink" target="_blank" rel="noopener" href="">GitHub</a>
   </div>
-  <div id="subArea"><!-- Phase 5: 订阅入口 --></div>
+  <div id="subArea"><!-- 订阅入口 --></div>
 
   <footer>
     第三方公益工具，数据来自入境处公开配额查询接口，每约 5 分钟检测一次，请以
@@ -159,6 +226,7 @@ var FEISHU_GROUP_URL = "";  // 飞书群分享链接（配置后按钮自动出�
 var OFFICE_SHORT = { FTO: "火炭", RHK: "港岛", RKO: "九龙", RTK: "将军澳", TMO: "屯门", YLO: "元朗" };
 var OFFICE_ORDER = ["RHK", "RKO", "RTK", "FTO", "TMO", "YLO"];
 var WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
+var BOOKING = "https://www.immd.gov.hk/hks/services/hkid/registration_appointment_booking.html";
 var DATA_URLS = [
   "data/quota.json",
   "https://cdn.jsdelivr.net/gh/" + REPO + "@main/data/quota.json"
@@ -167,19 +235,18 @@ var state = { data: null, meta: null, cfg: null, hideOffice: {}, onlyOpen: false
 
 document.getElementById("ghLink").href = "https://github.com/" + REPO;
 
-/* ---------- 主题 ---------- */
+/* ---------- 主题：暗色为默认 ---------- */
 function applyTheme(t) {
-  if (t) document.documentElement.setAttribute("data-theme", t);
+  if (t === "light") document.documentElement.setAttribute("data-theme", "light");
   else document.documentElement.removeAttribute("data-theme");
 }
 var savedTheme = null;
 try { savedTheme = localStorage.getItem("theme"); } catch (e) {}
-if (savedTheme) applyTheme(savedTheme);
-else if (window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches) applyTheme("dark");
+applyTheme(savedTheme === "light" ? "light" : "dark");
 document.getElementById("themeBtn").onclick = function () {
-  var cur = document.documentElement.getAttribute("data-theme") === "dark" ? null : "dark";
-  applyTheme(cur);
-  try { localStorage.setItem("theme", cur || "light"); } catch (e) {}
+  var next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+  applyTheme(next);
+  try { localStorage.setItem("theme", next); } catch (e) {}
 };
 
 /* ---------- 数据 ---------- */
@@ -191,10 +258,8 @@ function fetchData(i) {
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(function (d) {
       state.data = d;
-      // meta（新鲜度）与 config（分级提醒阈值）拉不到都不影响主渲染
       var aux = function (path) {
-        return fetch(DATA_URLS[i].replace("data/quota.json", path) + bust,
-                     { cache: "no-store" })
+        return fetch(DATA_URLS[i].replace("data/quota.json", path) + bust, { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .catch(function () { return null; });
       };
@@ -206,6 +271,33 @@ function fetchData(i) {
 function showErr(msg) {
   var el = document.getElementById("err");
   el.textContent = msg; el.style.display = "block";
+}
+
+/* ---------- 调度自证：直读 GitHub Actions 公开审计 API ---------- */
+function fetchProof() {
+  fetch("https://api.github.com/repos/" + REPO + "/actions/workflows/monitor.yml/runs?per_page=12&status=completed")
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (j) {
+      var runs = (j.workflow_runs || []).filter(function (r) { return r.name === "quota-monitor"; });
+      if (!runs.length) return;
+      var now = Date.now();
+      var times = runs.map(function (r) { return new Date(r.created_at).getTime(); });
+      var lastHour = times.filter(function (t) { return now - t < 3600e3; }).length;
+      var gaps = [];
+      for (var k = 0; k + 1 < times.length; k++) gaps.push((times[k] - times[k + 1]) / 60000);
+      var avg = gaps.length ? (gaps.reduce(function (a, b) { return a + b; }, 0) / gaps.length) : null;
+      var ticks = runs.slice(0, 12).map(function (r) {
+        return '<span class="' + (r.conclusion === "success" ? "ok" : "bad") + '">' +
+          (r.conclusion === "success" ? "✓" : "✗") + "</span>";
+      }).join("");
+      var el = document.getElementById("proof");
+      el.innerHTML = "⏱ 调度自证：近 1 小时检测 <b>" + lastHour + "</b> 次" +
+        (avg !== null ? " · 平均间隔 <b>" + avg.toFixed(1) + "</b> 分钟" : "") +
+        ' · <span class="ticks">' + ticks + "</span>" +
+        '<a href="https://github.com/' + REPO + '/actions" target="_blank" rel="noopener">完整审计 ↗</a>';
+      el.style.display = "flex";
+    })
+    .catch(function () { /* API 不可达时静默 */ });
 }
 
 /* 单元格综合状态：一般时段优先，延长时段有名额时加“+” */
@@ -236,7 +328,7 @@ function render() {
     (ageMin === null ? "?" : ageMin <= 0 ? "刚刚" : ageMin + " 分钟前") +
     (ageMin !== null && ageMin > 30 ? ' <span class="stale">⚠ 数据可能滞后</span>' : "");
 
-  /* 分级提醒横幅：紧急/提醒窗口内有名额时显性提示 */
+  /* 分级提醒横幅 */
   var bannerEl = document.getElementById("banner");
   bannerEl.innerHTML = "";
   var isIso = function (v) { return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v); };
@@ -262,7 +354,7 @@ function render() {
     var mk = function (cls, text, sub) {
       var a = document.createElement("a");
       a.className = "banner " + cls;
-      a.href = "https://system.es2.immd.gov.hk/smartics2-client/ropbooking/zh-CN/eservices/makeAppointment/step1";
+      a.href = BOOKING;
       a.target = "_blank"; a.rel = "noopener";
       a.innerHTML = text + "<small>" + sub + "</small>";
       bannerEl.appendChild(a);
@@ -270,11 +362,11 @@ function render() {
     if (urgentHits.length) {
       mk("urgent", "🚨 " + cfg.urgent_before.slice(5).replace("-", "/") + " 前有名额！" +
         urgentHits.slice(0, 4).join("、") + (urgentHits.length > 4 ? " 等 " + urgentHits.length + " 个" : ""),
-        "点此直达官方预约，手慢无");
+        "点此直达官方预约入口，手慢无");
     } else if (noticeHits.length) {
       mk("notice", "🔔 " + cfg.notice_before.slice(5).replace("-", "/") + " 前有名额：" +
         noticeHits.slice(0, 4).join("、") + (noticeHits.length > 4 ? " 等 " + noticeHits.length + " 个" : ""),
-        "点此直达官方预约");
+        "点此直达官方预约入口");
     }
   }
 
@@ -292,7 +384,7 @@ function render() {
     el.setAttribute("role", "button");
     el.innerHTML = '<div class="nm">' + (OFFICE_SHORT[off] || off) + "</div>" +
       '<div class="st' + (n ? " has" : "") + '">' +
-      (n ? "最早 " + first.slice(5).replace("-", "/") + " · " + n + " 天有" : "全部已满") + "</div>";
+      (n ? first.slice(5).replace("-", "/") + " 起 · " + n + "天" : "全部已满") + "</div>";
     el.onclick = function () {
       state.hideOffice[off] = !state.hideOffice[off];
       render();
@@ -366,6 +458,7 @@ document.getElementById("onlyOpen").onchange = function () {
 
 /* 每 5 分钟自动刷新；切回前台也刷新 */
 fetchData();
+fetchProof();
 setInterval(fetchData, 5 * 60 * 1000);
 document.addEventListener("visibilitychange", function () {
   if (!document.hidden) fetchData();

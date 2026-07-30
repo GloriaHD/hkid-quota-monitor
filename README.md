@@ -7,9 +7,10 @@
 
 ## 看板入口
 
-- GitHub Pages：https://chen1111-a.github.io/hkid-quota-monitor/
-- 内地手机入口（免翻墙）：https://cdn.jsdelivr.net/gh/chen1111-a/hkid-quota-monitor@main/index.html
-  （该镜像按纯文本返回，微信内置浏览器等国内手机浏览器会自动按网页渲染；桌面 Chrome/Edge 会显示源码，请用 Pages 链接）
+- 看板：https://chen1111-a.github.io/hkid-quota-monitor/
+  （内地网络对 github.io 时通时断，打不开时请配合加速器；jsDelivr/raw 直链带 nosniff 头只会显示源码，不要当网页入口用）
+- 内地免翻墙的完整体验走**邮件订阅 + 飞书群**——通知链路全程国内直连，放号第一时间推到手机，看板只是辅助
+- 想要稳定的内地网页入口：可将本仓库镜像到 Gitee 并开启 Gitee Pages（需实名认证，见自部署一节）
 
 ## 它怎么工作
 

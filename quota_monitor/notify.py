@@ -33,8 +33,9 @@ OFFICE_NAMES = {"FTO": "火炭", "RHK": "港岛(湾仔)", "RKO": "九龙", "RTK"
 STATUS_TEXT = {"g": "充足", "y": "少量"}
 # fork 自部署时链接自动指向自己的仓库（CI 注入 GITHUB_REPOSITORY）
 REPO = os.environ.get("GITHUB_REPOSITORY", "chen1111-a/hkid-quota-monitor")
-DASHBOARD = f"https://cdn.jsdelivr.net/gh/{REPO}@main/index.html"
-BOOKING = "https://system.es2.immd.gov.hk/smartics2-client/ropbooking/zh-CN/eservices/makeAppointment/step1"
+_OWNER, _NAME = REPO.split("/", 1)
+DASHBOARD = f"https://{_OWNER}.github.io/{_NAME}/"
+BOOKING = "https://www.immd.gov.hk/hks/services/hkid/registration_appointment_booking.html"
 
 
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
