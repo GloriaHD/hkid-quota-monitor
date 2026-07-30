@@ -37,6 +37,48 @@ def _read_json(path: Path) -> dict | None:
     return None
 
 
+HISTORY_COOLDOWN_H = 6
+
+
+def history_fresh(events: list[dict], existing_lines: list[str],
+                  now: datetime) -> list[dict]:
+    """放号规律统计的数据积累：只沉淀放号事件（quota_open/new_date），
+    且同一格子 6 小时内只记一次——官方接口负载均衡抖动会让同一格
+    反复 满↔有 横跳，裸记录一天能灌上万行噪声。"""
+    recent: dict[str, str] = {}
+    for ln in existing_lines[-3000:]:
+        try:
+            r = json.loads(ln)
+            recent[f'{r["office"]}|{r["date"]}|{r["session"]}'] = r["detected_at"]
+        except (ValueError, KeyError):
+            continue
+    out = []
+    for e in events:
+        if e["type"] not in ("quota_open", "new_date"):
+            continue
+        last = recent.get(f'{e["office"]}|{e["date"]}|{e["session"]}')
+        if last:
+            try:
+                if (now - datetime.fromisoformat(last)).total_seconds() \
+                        < HISTORY_COOLDOWN_H * 3600:
+                    continue
+            except ValueError:
+                pass
+        out.append(e)
+    return out
+
+
+def _append_history(events: list[dict], now: datetime) -> None:
+    hp = DATA / "history.jsonl"
+    existing = hp.read_text(encoding="utf-8").splitlines() if hp.exists() else []
+    fresh = history_fresh(events, existing, now)
+    if fresh:
+        with open(hp, "a", encoding="utf-8") as f:
+            for e in fresh:
+                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        print(f"history +{len(fresh)} open events")
+
+
 def _set_output(commit: bool) -> None:
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
@@ -73,6 +115,8 @@ def main() -> None:
         quota_path.write_text(
             json.dumps(new, ensure_ascii=False, separators=(",", ":")),
             encoding="utf-8")
+
+    _append_history(events, now)
 
     now_iso = now.isoformat(timespec="seconds")
     (DATA / "events.json").write_text(
