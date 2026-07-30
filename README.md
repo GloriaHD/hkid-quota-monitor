@@ -6,7 +6,8 @@
 ## 看板入口
 
 - GitHub Pages：https://chen1111-a.github.io/hkid-quota-monitor/
-- 内地直连镜像（免翻墙）：https://cdn.jsdelivr.net/gh/chen1111-a/hkid-quota-monitor@main/index.html
+- 内地手机入口（免翻墙）：https://cdn.jsdelivr.net/gh/chen1111-a/hkid-quota-monitor@main/index.html
+  （该镜像按纯文本返回，微信内置浏览器等国内手机浏览器会自动按网页渲染；桌面 Chrome/Edge 会显示源码，请用 Pages 链接）
 
 ## 它怎么工作
 
@@ -37,3 +38,4 @@ cron-job.org（每5分钟）──▶ GitHub Actions
 - 数据来自入境处公开配额查询页同源接口，抓取频率低于官方页面自身的自动刷新强度
 - 仅供学习交流，禁止商用；请以[入境处官网](https://www.immd.gov.hk/hks/services/hkid/registration_appointment_booking.html)为准
 - 订阅者邮箱加密存储，退订随时生效
+- 运营上限：QQ 个人邮箱日发送额度有限（数百封/天量级），订阅规模接近该量级时应改用企业邮箱或专业发信服务

@@ -147,7 +147,7 @@ var DATA_URLS = [
   "data/quota.json",
   "https://cdn.jsdelivr.net/gh/" + REPO + "@main/data/quota.json"
 ];
-var state = { data: null, hideOffice: {}, onlyOpen: false };
+var state = { data: null, meta: null, hideOffice: {}, onlyOpen: false };
 
 document.getElementById("ghLink").href = "https://github.com/" + REPO;
 
@@ -170,10 +170,18 @@ document.getElementById("themeBtn").onclick = function () {
 function fetchData(i) {
   i = i || 0;
   if (i >= DATA_URLS.length) { showErr("数据加载失败，请稍后刷新重试"); return; }
-  var sep = DATA_URLS[i].indexOf("?") < 0 ? "?" : "&";
-  fetch(DATA_URLS[i] + sep + "t=" + Math.floor(Date.now() / 60000), { cache: "no-store" })
+  var bust = "?t=" + Math.floor(Date.now() / 60000);
+  fetch(DATA_URLS[i] + bust, { cache: "no-store" })
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(function (d) { state.data = d; render(); })
+    .then(function (d) {
+      state.data = d;
+      // 新鲜度在 meta.json（快照本体不含时间戳）；meta 拉不到不影响主渲染
+      return fetch(DATA_URLS[i].replace("quota.json", "meta.json") + bust,
+                   { cache: "no-store" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; })
+        .then(function (m) { state.meta = m; render(); });
+    })
     .catch(function () { fetchData(i + 1); });
 }
 function showErr(msg) {
@@ -200,10 +208,12 @@ function render() {
   d.offices.forEach(function (o) { if (offices.indexOf(o.id) < 0) offices.push(o.id); });
 
   /* 新鲜度 */
-  var last = d.fetched_at ? new Date(d.fetched_at) : null;
+  var meta = state.meta || {};
+  var lastIso = meta.last_check || d.fetched_at;
+  var last = lastIso ? new Date(lastIso) : null;
   var ageMin = last ? Math.round((Date.now() - last.getTime()) / 60000) : null;
   var freshEl = document.getElementById("fresh");
-  freshEl.innerHTML = "官方数据 <b>" + (d.source_update_time || "?") + "</b>（港时）· 本站检查 " +
+  freshEl.innerHTML = "官方数据 <b>" + (meta.source_update_time || d.source_update_time || "?") + "</b>（港时）· 本站检查 " +
     (ageMin === null ? "?" : ageMin <= 0 ? "刚刚" : ageMin + " 分钟前") +
     (ageMin !== null && ageMin > 30 ? ' <span class="stale">⚠ 数据可能滞后</span>' : "");
 
@@ -279,7 +289,7 @@ document.getElementById("onlyOpen").onchange = function () {
   if (SUBSCRIBE_EMAIL) {
     btns.push('<a class="btn primary" style="flex:1" href="mailto:' + SUBSCRIBE_EMAIL +
       "?subject=" + encodeURIComponent("订阅香港ID放号提醒") +
-      "&body=" + encodeURIComponent("发送此邮件即完成订阅，无需修改内容。退订时回复「退订」即可。") +
+      "&body=" + encodeURIComponent("发送此邮件即完成订阅，无需修改内容。") +
       '">📮 邮件订阅放号提醒</a>');
   }
   if (FEISHU_GROUP_URL) {

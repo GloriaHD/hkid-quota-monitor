@@ -44,6 +44,14 @@ def load_state() -> dict:
     return {"cell_last_notified": {}}
 
 
+def prune_state(state: dict, today: str | None = None) -> None:
+    """剪掉已过期日期的冷却键，防止 state 文件无界增长。"""
+    today = today or _now().strftime("%Y-%m-%d")
+    cells = state.get("cell_last_notified", {})
+    for key in [k for k in cells if k.split("|")[1] < today]:
+        del cells[key]
+
+
 def filter_events(events: list[dict], state: dict,
                   cooldown_min: int, now: datetime | None = None) -> list[dict]:
     """只留通知级事件，且冷却期外；就地更新 state 的最近通知时间。"""
@@ -108,7 +116,7 @@ def build_email_html(lines: list[str], n: int) -> str:
 <a href="{BOOKING}" style="background:#0b57d0;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">立即去官方预约</a>
 &nbsp;<a href="{DASHBOARD}" style="color:#0b57d0">查看实时看板</a></p>
 <p style="color:#999;font-size:12px;line-height:1.6">名额变动很快，以官方预约页实际为准。<br>
-第三方公益工具，非入境处官方服务。退订：回复本邮件，正文写「退订」。</p></div>"""
+第三方公益工具，非入境处官方服务。想停止提醒：给本邮箱另发一封主题为「退订」的新邮件即可。</p></div>"""
 
 
 def send_email(recipients: list[str], subject: str, html: str, dry: bool) -> None:
@@ -123,21 +131,31 @@ def send_email(recipients: list[str], subject: str, html: str, dry: bool) -> Non
     msg = MIMEText(html, "html", "utf-8")
     msg["Subject"] = Header(subject, "utf-8")
     msg["From"] = formataddr((str(Header("香港ID配额监控", "utf-8")), user))
+    sent = failed = 0
     with smtplib.SMTP("smtp.qq.com", 587, timeout=30) as s:
         s.starttls(context=ssl.create_default_context())
         s.login(user, pwd)
-        # 逐封独立收件（BCC 语义），避免暴露订阅者列表
+        # 逐封独立收件（BCC 语义），避免暴露订阅者列表；
+        # 单收件人被拒不许中断其余人的通知
         for rcpt in recipients:
             del msg["To"]
             msg["To"] = rcpt
-            s.sendmail(user, [rcpt], msg.as_string())
-    print(f"email sent -> {len(recipients)} 人")
+            try:
+                s.sendmail(user, [rcpt], msg.as_string())
+                sent += 1
+            except smtplib.SMTPException as e:
+                failed += 1
+                print(f"WARN send to {rcpt} failed: {e}")
+    print(f"email sent -> {sent} ok, {failed} failed")
 
 
 def send_feishu(lines: list[str], n: int, dry: bool) -> None:
     hook = os.environ.get("FEISHU_WEBHOOK", "")
     if not hook:
         print("skip feishu: no webhook")
+        return
+    if not hook.startswith("https://"):
+        print("skip feishu: webhook must be https")
         return
     text = (f"🎫 检测到 {n} 个香港ID预约名额放出\n" + "\n".join(lines) +
             f"\n\n官方预约：{BOOKING}\n实时看板：{DASHBOARD}")
@@ -176,14 +194,20 @@ def main() -> None:
         recipients.append(admin)
     recipients += [r for r in load_subscribers() if r not in recipients]
 
-    send_email(recipients, f"🎫 香港ID预约放号：{n} 个名额（{lines[0][:20]}…）"
-               if len(lines[0]) > 20 else f"🎫 香港ID预约放号：{n} 个名额",
-               build_email_html(lines, n), dry)
-    send_feishu(lines, n, dry)
-
+    # 冷却状态先落盘再发送：单通道抛异常时另一通道已发出的通知
+    # 不会因 state 丢失而在下一轮重复轰炸（宁可漏一轮，不可炸订阅者）
+    prune_state(state)
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=1),
                           encoding="utf-8")
-    print(f"OK notified={n} cells, state saved")
+
+    for send in (lambda: send_email(recipients, f"🎫 香港ID预约放号：{n} 个名额",
+                                    build_email_html(lines, n), dry),
+                 lambda: send_feishu(lines, n, dry)):
+        try:
+            send()
+        except Exception as e:  # noqa: BLE001 - 通道间互不拖累
+            print(f"WARN notify channel failed: {e}")
+    print(f"OK notified={n} cells")
 
 
 if __name__ == "__main__":

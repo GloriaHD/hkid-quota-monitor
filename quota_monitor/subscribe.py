@@ -38,13 +38,37 @@ UNSUB_WORDS = ("退订", "取消订阅", "UNSUBSCRIBE", "unsubscribe")
 DASHBOARD = "https://cdn.jsdelivr.net/gh/chen1111-a/hkid-quota-monitor@main/index.html"
 
 
+_QUOTE_MARKERS = re.compile(
+    r"^(>|On .+wrote:|在.+写道|-{2,}\s*(原始邮件|Original Message)|发件人[:：]|From[:：])")
+
+
+def _strip_quoted(body: str) -> str:
+    """去掉回复中的引用部分：遇到引用标记行即截断，> 开头行直接丢弃。
+
+    没有这一步，通知/确认邮件页脚里的「退订」二字会随引文回流，
+    把用户的任意回复（如"谢谢"）误判成退订请求。
+    """
+    kept = []
+    for line in body.splitlines():
+        s = line.strip()
+        if _QUOTE_MARKERS.match(s):
+            break
+        if s.startswith(">"):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def classify(subject: str, body: str) -> str | None:
-    """'subscribe' / 'unsubscribe' / None。退订词优先（\"取消订阅\"同时含两类词）。"""
-    text = f"{subject}\n{body}"
-    if any(w in text for w in UNSUB_WORDS):
-        return "unsubscribe"
-    if any(w in text for w in SUB_WORDS):
-        return "subscribe"
+    """'subscribe' / 'unsubscribe' / None。
+
+    主题优先于正文（正文只看非引用部分）；同一层级内退订词优先
+    （"取消订阅"同时含两类词）。"""
+    for text in (subject, _strip_quoted(body)):
+        if any(w in text for w in UNSUB_WORDS):
+            return "unsubscribe"
+        if any(w in text for w in SUB_WORDS):
+            return "subscribe"
     return None
 
 
@@ -91,29 +115,41 @@ def save_roster(subs: list[dict]) -> None:
 
 
 def _decode_header(raw: str) -> str:
-    parts = email.header.decode_header(raw or "")
+    """RFC2047 头解码。字符集名是攻击者可控字段，非法名会抛 LookupError，
+    必须兜住，否则一封毒邮件能永久卡死整条订阅链路。"""
+    try:
+        parts = email.header.decode_header(raw or "")
+    except Exception:  # noqa: BLE001
+        return raw or ""
     out = []
     for val, enc in parts:
         if isinstance(val, bytes):
-            out.append(val.decode(enc or "utf-8", errors="replace"))
+            try:
+                out.append(val.decode(enc or "utf-8", errors="replace"))
+            except LookupError:
+                out.append(val.decode("utf-8", errors="replace"))
         else:
             out.append(val)
     return "".join(out)
 
 
 def _body_text(msg: email.message.Message) -> str:
+    def _safe_decode(payload: bytes, charset: str | None) -> str:
+        try:
+            return payload.decode(charset or "utf-8", errors="replace")[:2000]
+        except LookupError:  # 非法字符集名同样是攻击者可控字段
+            return payload.decode("utf-8", errors="replace")[:2000]
+
     if msg.is_multipart():
         for part in msg.walk():
             if part.get_content_type() == "text/plain":
                 payload = part.get_payload(decode=True)
                 if payload:
-                    return payload.decode(part.get_content_charset() or "utf-8",
-                                          errors="replace")[:2000]
+                    return _safe_decode(payload, part.get_content_charset())
         return ""
     payload = msg.get_payload(decode=True)
     if payload:
-        return payload.decode(msg.get_content_charset() or "utf-8",
-                              errors="replace")[:2000]
+        return _safe_decode(payload, msg.get_content_charset())
     return ""
 
 
@@ -122,7 +158,7 @@ def send_confirmation(user: str, pwd: str, addr: str, action: str, dry: bool) ->
         subject = "✅ 订阅成功：香港ID预约放号提醒"
         html = (f"<p>订阅成功！之后任一办事处放出预约名额，会第一时间邮件通知你。</p>"
                 f"<p>实时看板：<a href='{DASHBOARD}'>{DASHBOARD}</a></p>"
-                f"<p style='color:#999;font-size:12px'>退订：回复本邮件，正文写「退订」。"
+                f"<p style='color:#999;font-size:12px'>想停止提醒：给本邮箱另发一封主题为「退订」的新邮件即可。"
                 f"第三方公益工具，非入境处官方服务。</p>")
     else:
         subject = "已退订：香港ID预约放号提醒"
@@ -162,29 +198,39 @@ def main() -> None:
             return
 
         subs = load_roster()
-        changed = False
+        n_changed = 0
         now_iso = datetime.now(HKT).isoformat(timespec="seconds")
         for mid in ids[:100]:
-            _, msg_data = imap.fetch(mid, "(RFC822)")
-            msg = email.message_from_bytes(msg_data[0][1])
-            addr = parseaddr(msg.get("From", ""))[1].lower()
-            subject = _decode_header(msg.get("Subject", ""))
-            action = classify(subject, _body_text(msg))
-            if action and EMAIL_RE.match(addr) and addr != user.lower():
-                subs, did = apply_change(subs, addr, action, now_iso)
-                if did:
-                    changed = True
+            # 单封邮件的任何解析/处理异常都不许炸穿批次：
+            # 1) 已处理邮件的名册变更已即时落盘，不会因后续崩溃丢失
+            # 2) finally 保证标已读，毒邮件不会每轮重复卡死链路
+            try:
+                _, msg_data = imap.fetch(mid, "(RFC822)")
+                msg = email.message_from_bytes(msg_data[0][1])
+                addr = parseaddr(msg.get("From", ""))[1].lower()
+                subject = _decode_header(msg.get("Subject", ""))
+                action = classify(subject, _body_text(msg))
+                if action and EMAIL_RE.match(addr) and addr != user.lower():
+                    subs, did = apply_change(subs, addr, action, now_iso)
+                    if did:
+                        save_roster(subs)  # 即时保存，每封独立生效
+                        n_changed += 1
+                        try:
+                            send_confirmation(user, pwd, addr, action, dry)
+                        except Exception as e:  # noqa: BLE001 - 确认信失败不影响登记
+                            print(f"WARN confirm mail failed for {addr}: {e}")
+            except Exception as e:  # noqa: BLE001
+                print(f"WARN skip malformed mail uid={mid!r}: {e}")
+            finally:
+                if not dry:
                     try:
-                        send_confirmation(user, pwd, addr, action, dry)
-                    except Exception as e:  # noqa: BLE001 - 确认信失败不影响登记
-                        print(f"WARN confirm mail failed for {addr}: {e}")
-            if not dry:
-                imap.store(mid, "+FLAGS", "\\Seen")
+                        imap.store(mid, "+FLAGS", "\\Seen")
+                    except Exception as e:  # noqa: BLE001
+                        print(f"WARN mark seen failed uid={mid!r}: {e}")
 
-        if changed:
-            save_roster(subs)
+        if n_changed:
             n_active = sum(1 for s in subs if s.get("active", True))
-            print(f"roster updated: {n_active} active subscribers")
+            print(f"roster updated: {n_changed} changes, {n_active} active subscribers")
         else:
             print("no roster change")
     finally:

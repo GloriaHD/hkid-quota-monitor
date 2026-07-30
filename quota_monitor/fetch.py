@@ -87,9 +87,10 @@ def normalize(raw: dict) -> dict:
             "K": _parse_status(row.get("quotaK", "")),
         }
 
+    # 注意：快照内容保持确定性（不含抓取时间戳），抓取时间记在 meta.json；
+    # 这样"内容没变就不提交"的判断才成立，仓库不会被纯时间戳提交灌爆
     return {
         "schema": 1,
-        "fetched_at": datetime.now(HKT).isoformat(timespec="seconds"),
         "source_update_time": raw.get("lastUpdateTime"),
         "offices": offices,
         "dates": sorted(dates),
@@ -97,8 +98,22 @@ def normalize(raw: dict) -> dict:
     }
 
 
+def validate_snapshot(snap: dict) -> None:
+    """接口偶发返回合法但空/残缺的 JSON（维护页、限流）。空快照一旦落盘，
+    下一轮恢复正常时所有日期都会被判成 new_date，触发对全体订阅者的
+    假放号群发——所以残缺快照必须让本轮直接失败，绝不入链。"""
+    offices = snap.get("offices", [])
+    quota = snap.get("quota", {})
+    dates = snap.get("dates", [])
+    if len(offices) < 6 or not quota or len(dates) < 30:
+        raise RuntimeError(
+            f"接口返回残缺数据（offices={len(offices)} dates={len(dates)} "
+            f"quota_offices={len(quota)}），拒绝落盘")
+
+
 def main(out_path: str = "data/quota.json") -> None:
     snapshot = normalize(fetch_raw())
+    validate_snapshot(snapshot)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")),

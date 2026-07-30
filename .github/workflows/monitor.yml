@@ -25,7 +25,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install deps
+        run: pip install -q cryptography
+
       - name: Run quota check
+        id: run
         run: python -m quota_monitor.run
 
       - name: Process subscriptions (mail-in)
@@ -34,9 +38,7 @@ jobs:
           QQ_SMTP_USER: ${{ secrets.QQ_SMTP_USER }}
           QQ_SMTP_PASS: ${{ secrets.QQ_SMTP_PASS }}
           SUBSCRIBER_KEY: ${{ secrets.SUBSCRIBER_KEY }}
-        run: |
-          pip install -q cryptography
-          python -m quota_monitor.subscribe
+        run: python -m quota_monitor.subscribe
 
       - name: Send notifications
         continue-on-error: true
@@ -46,16 +48,22 @@ jobs:
           ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           SUBSCRIBER_KEY: ${{ secrets.SUBSCRIBER_KEY }}
-        run: |
-          pip install -q cryptography
-          python -m quota_monitor.notify
+        run: python -m quota_monitor.notify
 
-      - name: Commit data if changed
+      - name: Commit data
         id: commit
         run: |
           git config user.name "quota-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data/
+          # 配额内容有变/心跳到期 -> 全量 data/；否则只提交订阅名册和
+          # 通知冷却状态（若有变化），避免纯时间戳提交灌爆仓库
+          if [ "${{ steps.run.outputs.commit }}" = "true" ]; then
+            git add data/
+          else
+            for f in data/subscribers.json.enc data/notify_state.json; do
+              if [ -f "$f" ]; then git add "$f"; fi
+            done
+          fi
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
@@ -68,6 +76,6 @@ jobs:
       - name: Purge jsDelivr cache (mainland mirror freshness)
         if: steps.commit.outputs.changed == 'true'
         run: |
-          for f in data/quota.json data/meta.json data/events.json; do
+          for f in index.html data/quota.json data/meta.json data/events.json; do
             curl -sS -m 20 "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/${f}" || true
           done
