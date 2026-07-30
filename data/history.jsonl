@@ -38,3 +38,4 @@
 {"type": "quota_open", "office": "RTK", "date": "2026-09-17", "session": "R", "from": "r", "to": "y", "detected_at": "2026-07-30T18:04:28+08:00"}
 {"type": "quota_open", "office": "TMO", "date": "2026-09-18", "session": "R", "from": "r", "to": "y", "detected_at": "2026-07-30T18:04:28+08:00"}
 {"type": "quota_open", "office": "YLO", "date": "2026-09-17", "session": "R", "from": "r", "to": "y", "detected_at": "2026-07-30T18:04:28+08:00"}
+{"type": "quota_open", "office": "TMO", "date": "2026-09-21", "session": "R", "from": "r", "to": "y", "detected_at": "2026-07-30T21:14:27+08:00"}
