@@ -256,7 +256,7 @@ function render() {
   var last = lastIso ? new Date(lastIso) : null;
   var ageMin = last ? Math.round((Date.now() - last.getTime()) / 60000) : null;
   var freshEl = document.getElementById("fresh");
-  freshEl.innerHTML = "官方数据 <b>" + (meta.source_update_time || d.source_update_time || "?") + "</b>（港时）· 本站检查 " +
+  freshEl.innerHTML = "官方数据 <b>" + (meta.source_update_time || d.source_update_time || "?") + "</b>（港时）· 数据入库 " +
     (ageMin === null ? "?" : ageMin <= 0 ? "刚刚" : ageMin + " 分钟前") +
     (ageMin !== null && ageMin > 30 ? ' <span class="stale">⚠ 数据可能滞后</span>' : "");
 
@@ -414,7 +414,9 @@ function fetchProof() {
           (r.conclusion === "success" ? "✓" : "✗") + "</span>";
       }).join("");
       var el = document.getElementById("proof");
-      el.innerHTML = "⏱ 调度自证：近 1 小时检测 <b>" + lastHour + "</b> 次" +
+      var latestAge = Math.round((now - times[0]) / 60000);
+      el.innerHTML = "⏱ 最近检测 <b>" + (latestAge <= 0 ? "刚刚" : latestAge + " 分钟前") + "</b>" +
+        " · 近 1 小时 <b>" + lastHour + "</b> 次" +
         (avg !== null ? " · 平均间隔 <b>" + avg.toFixed(1) + "</b> 分钟" : "") +
         ' · <span class="ticks">' + ticks + "</span>" +
         '<a href="https://github.com/' + REPO + '/actions" target="_blank" rel="noopener">完整审计 ↗</a>';
