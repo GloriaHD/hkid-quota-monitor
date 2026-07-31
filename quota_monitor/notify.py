@@ -229,10 +229,15 @@ def send_emails(payloads: list[tuple[str, str, str]], dry: bool) -> None:
     if not payloads:
         print("skip email: no recipients")
         return
-    if dry or not user or not pwd:
+    if dry:
         for rcpt, subject, _ in payloads:
             print(f"[DRY] email -> {mask_email(rcpt)}: {subject}")
         return
+    # 缺凭据必须抛，不能跟 dry 走同一条静默返回：那会让本通道计为「成功」，
+    # 于是「飞书 token 坏 + SMTP 没配」这种半配状态下一个人都没通知到，
+    # 冷却却照烧 6 小时且不回滚 —— 那批名额彻底错过
+    if not user or not pwd:
+        raise RuntimeError("QQ_SMTP_USER/PASS 缺失，邮件通道未发送")
     sent = failed = 0
     with smtplib.SMTP("smtp.qq.com", 587, timeout=30) as s:
         s.starttls(context=ssl.create_default_context())
@@ -279,7 +284,26 @@ def send_feishu(lines: list[str], n: int, dry: bool, tier: str = "info",
     req = urllib.request.Request(hook, data=body,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=20) as resp:
-        print(f"feishu sent: HTTP {resp.status}")
+        raw = resp.read(4096).decode("utf-8", "replace")
+        status = resp.status
+    check_feishu_body(status, raw)
+    print(f"feishu sent: HTTP {status}")
+
+
+def check_feishu_body(status: int, raw: str) -> None:
+    """飞书 webhook 失败也回 HTTP 200，错误只写在返回体的 code 里
+    （换机器人没同步 secret -> code 19001 param invalid）。只看 HTTP 状态码
+    等于把「一条都没送到」记成成功，而放号提醒漏一轮就是彻底错过，
+    所以必须解析返回体并抛出——抛出后该通道计为失败，两条通道全失败时
+    main 才回滚冷却让下一轮重试（单通道失败不回滚，避免另一通道重复轰炸）。
+    返回体解析不出来时不抛：那是飞书改格式，不该拖垮真送达的通知。"""
+    try:
+        code = json.loads(raw).get("code")
+    except (ValueError, AttributeError):
+        return
+    if code not in (0, None):
+        raise RuntimeError(f"feishu rejected (HTTP {status}, code={code}): "
+                           f"{raw[:200]}")
 
 
 def main() -> None:

@@ -6,9 +6,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from quota_monitor.notify import (compose, event_matches, filter_events,
-                                  in_monitor_window, load_alert_cfg, summarize,
-                                  tier_of)
+from quota_monitor.notify import (check_feishu_body, compose, event_matches,
+                                  filter_events, in_monitor_window,
+                                  load_alert_cfg, summarize, tier_of)
 
 HKT = timezone(timedelta(hours=8))
 T0 = datetime(2026, 7, 30, 12, 0, tzinfo=HKT)
@@ -177,6 +177,94 @@ def test_monitor_window_config_is_validated():
         _j.dumps({"monitor_before": "2026-09-16"}))) == {"monitor_before": "2026-09-16"}
     assert load_alert_cfg(_cfg_file("t7.json",
         _j.dumps({"monitor_before": "9/16/2026"}))) == {}   # 非 ISO 丢弃
+
+
+def test_feishu_bad_token_raises_despite_http_200():
+    """实测：机器人换了但 secret 没同步时，飞书回 HTTP 200 + code 19001。
+    只看状态码会把「一条没送到」记成成功，冷却照烧 -> 这批名额彻底错过。"""
+    raw = ('{"code":19001,"data":{},"msg":"param invalid: '
+           'incoming webhook access token invalid"}')
+    try:
+        check_feishu_body(200, raw)
+    except RuntimeError as e:
+        assert "19001" in str(e)
+    else:
+        raise AssertionError("坏 token 必须抛出，否则失败被静默吞掉")
+
+
+def test_feishu_success_body_passes():
+    check_feishu_body(200, '{"StatusCode":0,"code":0,"msg":"success"}')  # 不抛即通过
+
+
+def test_feishu_unparsable_body_does_not_raise():
+    """飞书改返回格式不该拖垮真送达的通知——解析不出来一律放行。"""
+    check_feishu_body(200, "")
+    check_feishu_body(200, "<html>gateway</html>")
+    check_feishu_body(200, '{"msg":"ok"}')          # 没有 code 字段
+    check_feishu_body(200, "[1,2]")                 # 合法 JSON 但不是对象
+    check_feishu_body(200, "123")                   # 裸数字，.get 会 AttributeError
+
+
+def test_send_feishu_actually_calls_the_check():
+    """守卫必须真的接在 send_feishu 上。只测 check_feishu_body 本身不够——
+    删掉那行调用时函数级测试全绿，而症状恰恰是它要防的那种无声失败。"""
+    import os
+    from quota_monitor import notify as N
+
+    class _Resp:
+        status = 200
+
+        def read(self, n=None):
+            return b'{"code":19001,"msg":"param invalid"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    orig_open = N.urllib.request.urlopen
+    orig_hook = os.environ.get("FEISHU_WEBHOOK")
+    os.environ["FEISHU_WEBHOOK"] = "https://open.feishu.cn/open-apis/bot/v2/hook/x"
+    N.urllib.request.urlopen = lambda *a, **kw: _Resp()
+    try:
+        N.send_feishu(["火炭 2026-09-08 上午"], 1, dry=False)
+    except RuntimeError as e:
+        assert "19001" in str(e)
+    else:
+        raise AssertionError("send_feishu 必须把返回体交给 check_feishu_body")
+    finally:
+        N.urllib.request.urlopen = orig_open
+        if orig_hook is None:
+            os.environ.pop("FEISHU_WEBHOOK", None)
+        else:
+            os.environ["FEISHU_WEBHOOK"] = orig_hook
+
+
+def test_send_emails_missing_creds_is_a_failure_not_silent_success():
+    """缺 SMTP 凭据必须抛：静默返回会让本通道计为成功，于是
+    「飞书坏 + 邮件没配」时一个人都没通知到，冷却却照烧且不回滚。"""
+    import os
+    from quota_monitor.notify import send_emails
+
+    saved = {k: os.environ.get(k) for k in ("QQ_SMTP_USER", "QQ_SMTP_PASS")}
+    os.environ["QQ_SMTP_USER"] = ""
+    os.environ["QQ_SMTP_PASS"] = ""
+    try:
+        send_emails([], dry=False)          # 没收件人 -> 无事发生，不该抛
+        try:
+            send_emails([("a@b.com", "s", "<p>h</p>")], dry=False)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("缺凭据却有收件人时必须抛出")
+        send_emails([("a@b.com", "s", "<p>h</p>")], dry=True)   # 演练照常放行
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 if __name__ == "__main__":

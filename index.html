@@ -187,7 +187,10 @@ var REPO = (function () {
 var OWNER_REPO = "chen1111-a/hkid-quota-monitor";
 var SUBSCRIBE_EMAIL = REPO === OWNER_REPO ? "2037445294@qq.com" : "";
 var FEISHU_GROUP_URL = REPO === OWNER_REPO
-  ? "https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=726v4702-ecda-452b-9c61-3b9b4d0d5cb6" : "";  // 飞书群分享链接（配置后按钮自动出现）
+  /* 链接里的 & 写成 &amp;：这串会直接拼进 innerHTML 的 href，裸 & 属于
+     HTML 的歧义实体引用，浏览器目前当字面量处理但不保证一直如此。
+     注意本串已是 HTML 转义态，勿再过 esc()，否则 &amp;amp; 会断链 */
+  ? "https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=925r5d77-9e8a-402d-a6ce-f93d9f90a4f8&amp;share_token=56041516-e26d-43f0-ac73-c500f1d730d8" : "";  // 飞书群分享链接（配置后按钮自动出现）
 /* 用官方预约系统显示的地区名（接口 district 字段），与官网对得上 */
 var OFFICE_SHORT = { RHK: "湾仔", RKO: "长沙湾", RTK: "将军澳", FTO: "火炭", TMO: "屯门", YLO: "元朗" };
 var OFFICE_ORDER = ["RHK", "RKO", "RTK", "FTO", "TMO", "YLO"];
@@ -433,7 +436,7 @@ document.getElementById("onlyOpen").onchange = function () {
   if (SUBSCRIBE_EMAIL) {
     btns.push('<a class="btn primary" style="flex:1" href="mailto:' + SUBSCRIBE_EMAIL +
       "?subject=" + encodeURIComponent("订阅香港ID放号提醒") +
-      "&body=" + encodeURIComponent("发送此邮件即完成订阅，无需修改内容。") +
+      "&amp;body=" + encodeURIComponent("发送此邮件即完成订阅，无需修改内容。") +
       '">📮 邮件订阅放号提醒</a>');
   }
   if (FEISHU_GROUP_URL) {
@@ -446,7 +449,7 @@ document.getElementById("onlyOpen").onchange = function () {
     (SUBSCRIBE_EMAIL ? '<div class="subHint">点按钮发送一封邮件即完成订阅（全程国内网络直连），约 2 分钟内收到确认邮件</div>' +
       '<div class="subHint"><a style="color:var(--accent);text-decoration:none" href="mailto:' + SUBSCRIBE_EMAIL +
       "?subject=" + encodeURIComponent("订阅香港ID放号提醒") +
-      "&body=" + encodeURIComponent(
+      "&amp;body=" + encodeURIComponent(
         "订阅香港ID放号提醒（个性化）。\n" +
         "只看办事处：湾仔 长沙湾 将军澳 火炭 屯门 元朗 ←把不要的删掉\n" +
         "只要这天之前的名额：2027-12-31 ←改成你的截止日期\n" +
