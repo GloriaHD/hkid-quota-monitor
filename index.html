@@ -89,6 +89,10 @@ td.g { background: var(--good-bg); color: var(--good-ink); font-weight: 700; }
 td.y { background: var(--warn-bg); color: var(--warn-ink); font-weight: 700; }
 td.r { background: var(--crit-bg); color: var(--crit-ink); }
 td.x { color: var(--ink-3); }
+tr.out td, tr.out td.q { opacity: .34; }
+tr.out td.d { color: var(--ink-3); }
+.mline { border-top: 1px dashed var(--line); }
+.mline td { padding: 10px 0 2px; font-size: 11px; color: var(--ink-3); text-align: center; }
 tr.mo td.m { padding: 14px 0 4px; font-size: 13px; font-weight: 700; color: var(--ink); }
 
 .empty { text-align: center; color: var(--ink-3); padding: 40px 0; font-size: 14px; }
@@ -301,6 +305,7 @@ function render() {
   if (state.cfg) {
     if (isIso(state.cfg.urgent_before)) cfg.urgent_before = state.cfg.urgent_before;
     if (isIso(state.cfg.notice_before)) cfg.notice_before = state.cfg.notice_before;
+    if (isIso(state.cfg.monitor_before)) cfg.monitor_before = state.cfg.monitor_before;
     if (cfg.urgent_before && cfg.notice_before && cfg.urgent_before > cfg.notice_before) {
       var tmp = cfg.urgent_before; cfg.urgent_before = cfg.notice_before; cfg.notice_before = tmp;
     }
@@ -311,6 +316,7 @@ function render() {
       offices.forEach(function (off) {
         var c = cellOf(d.quota, off, date);
         if (!c || (c.best !== "g" && c.best !== "y")) return;
+        if (cfg.monitor_before && date >= cfg.monitor_before) return;  // 窗口外不提醒
         var label = esc(OFFICE_SHORT[off] || off) + " " + esc(date.slice(5).replace("-", "/"));
         if (cfg.urgent_before && date < cfg.urgent_before) urgentHits.push(label);
         else if (cfg.notice_before && date < cfg.notice_before) noticeHits.push(label);
@@ -372,7 +378,7 @@ function render() {
     '<col class="dcol">' + shown.map(function () { return "<col>"; }).join("");
 
   var tb = document.getElementById("tb");
-  var rows = [], lastMonth = "", shownRows = 0;
+  var rows = [], lastMonth = "", shownRows = 0, markedOut = false;
   d.dates.forEach(function (date) {
     var cells = shown.map(function (o) { return cellOf(d.quota, o, date); });
     var hasOpen = cells.some(function (c) { return c && (c.best === "g" || c.best === "y"); });
@@ -391,7 +397,13 @@ function render() {
       var ch = c.best === "g" ? "有" : c.best === "y" ? "少" : "满";
       return '<td class="q ' + c.best + '">' + ch + (c.plusK ? "+" : "") + "</td>";
     });
-    rows.push('<tr><td class="d' + (wd === 0 || wd === 6 ? " we" : "") + '">' +
+    var outOfScope = cfg.monitor_before && date >= cfg.monitor_before;
+    if (outOfScope && !markedOut) {
+      markedOut = true;
+      rows.push('<tr class="mline"><td colspan="' + (shown.length + 1) + '">' +
+        "以下日期在监测范围外（" + esc(cfg.monitor_before) + " 起），不推送提醒</td></tr>");
+    }
+    rows.push('<tr' + (outOfScope ? ' class="out"' : "") + '><td class="d' + (wd === 0 || wd === 6 ? " we" : "") + '">' +
       date.slice(5).replace("-", "/") + '<span class="wd">周' + WEEKDAYS[wd] + "</span></td>" +
       tds.join("") + "</tr>");
     shownRows++;

@@ -7,7 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from quota_monitor.notify import (compose, event_matches, filter_events,
-                                  load_alert_cfg, summarize, tier_of)
+                                  in_monitor_window, load_alert_cfg, summarize,
+                                  tier_of)
 
 HKT = timezone(timedelta(hours=8))
 T0 = datetime(2026, 7, 30, 12, 0, tzinfo=HKT)
@@ -153,6 +154,29 @@ def test_prune_state_drops_malformed_keys():
                                     "FTO|2026-09-08|R": T0.isoformat()}}
     prune_state(state, today="2026-07-30")
     assert list(state["cell_last_notified"]) == ["FTO|2026-09-08|R"]
+
+
+def test_monitor_window_filters_far_dates():
+    """窗口外（10 月、9 月下旬）的名额一律不推送——实测这类占放号总量约三成。"""
+    cfg = {"monitor_before": "2026-09-16"}
+    assert in_monitor_window("2026-08-20", cfg)
+    assert in_monitor_window("2026-09-15", cfg)
+    assert not in_monitor_window("2026-09-16", cfg)      # 边界：等于截止日不算
+    assert not in_monitor_window("2026-09-25", cfg)
+    assert not in_monitor_window("2026-10-08", cfg)
+
+
+def test_monitor_window_absent_means_no_filter():
+    assert in_monitor_window("2026-12-31", {})
+    assert in_monitor_window("2026-12-31", {"urgent_before": "2026-09-01"})
+
+
+def test_monitor_window_config_is_validated():
+    import json as _j
+    assert load_alert_cfg(_cfg_file("t6.json",
+        _j.dumps({"monitor_before": "2026-09-16"}))) == {"monitor_before": "2026-09-16"}
+    assert load_alert_cfg(_cfg_file("t7.json",
+        _j.dumps({"monitor_before": "9/16/2026"}))) == {}   # 非 ISO 丢弃
 
 
 if __name__ == "__main__":

@@ -56,12 +56,18 @@ def load_alert_cfg(path: str = "config.json") -> dict:
     except Exception:  # noqa: BLE001
         return {}
     cfg = {k: v for k, v in raw.items()
-           if k in ("urgent_before", "notice_before")
+           if k in ("urgent_before", "notice_before", "monitor_before")
            and isinstance(v, str) and _ISO_DATE.fullmatch(v)}
     u, n = cfg.get("urgent_before"), cfg.get("notice_before")
     if u and n and u > n:
         cfg["urgent_before"], cfg["notice_before"] = n, u
     return cfg
+
+
+def in_monitor_window(date: str, cfg: dict) -> bool:
+    """是否在监测窗口内。窗口外（如 10 月、9 月下旬的名额）既不通知也不计冷却——
+    实测这类占放号总量约三成，推给用户全是噪声。未配置 monitor_before 时不过滤。"""
+    return not cfg.get("monitor_before") or date < cfg["monitor_before"]
 
 
 def tier_of(date: str, cfg: dict) -> str:
@@ -287,10 +293,17 @@ def main() -> None:
     events = json.loads(ev_path.read_text(encoding="utf-8")).get("events", [])
     cooldown = int(os.environ.get("NOTIFY_COOLDOWN_MIN", "360"))
 
+    cfg = load_alert_cfg()
+    in_window = [e for e in events if in_monitor_window(e["date"], cfg)]
+    n_out = len(events) - len(in_window)
+    if n_out:
+        print(f"filtered: {n_out} 个事件在监测窗口外"
+              f"（>= {cfg.get('monitor_before')}），不推送")
+
     state = load_state()
-    fresh = filter_events(events, state, cooldown)
+    fresh = filter_events(in_window, state, cooldown)
     if not fresh:
-        print("skip: no notify-worthy events after cooldown filter")
+        print("skip: no notify-worthy events after window/cooldown filter")
         return
 
     n = len(fresh)
@@ -303,7 +316,6 @@ def main() -> None:
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=1),
                           encoding="utf-8")
 
-    cfg = load_alert_cfg()
     # 逐人个性化：管理员收全量；订阅者只收自己偏好范围内的事件，无匹配不打扰
     payloads: list[tuple[str, str, str]] = []
     admin = os.environ.get("ADMIN_EMAIL", "").lower()
