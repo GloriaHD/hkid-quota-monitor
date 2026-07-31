@@ -20,7 +20,8 @@ GET https://eservices.es2.immd.gov.hk/surgecontrolgate/ticket/getSituation?svcId
 | `label` / `scheme` / `col` / `css` / `afterRender` | 前端渲染配置，可忽略 |
 
 ## 办事处
-FTO 火炭 / RHK 港岛(湾仔) / RKO 九龙 / RTK 将军澳 / TMO 屯门 / YLO 元朗
+RHK 湾仔 / RKO 长沙湾 / RTK 将军澳 / FTO 火炭 / TMO 屯门 / YLO 元朗
+（显示名取接口 district 字段，与官方预约系统一致；officeName 是「港岛办事处」这类内部称谓，勿用）
 
 ## 快照规范化（data/quota.json）
 状态压缩为单字符：`g`充足 `y`少量 `r`已满 `x`不开放；

@@ -88,6 +88,11 @@ jobs:
               for f in quota.json quota_prev.json events.json meta.json; do
                 if [ -f "$MINE/$f" ]; then cp -f "$MINE/$f" "data/$f"; fi
               done
+            elif [ -f "$MINE/meta.json" ]; then
+              # 数据未推进的轮次也可能因心跳到期需要落库 meta（看板的
+              # 「本站检查」靠它，否则会停在上次数据推进的时刻误报滞后）。
+              # 只有内容真变了才会进入下面的 commit，不会平白多出提交。
+              cp -f "$MINE/meta.json" data/meta.json
             fi
             # history.jsonl 是 append-only，「最新者胜」对它是错的语义：
             # 以远端为底，只补上本轮新增的行

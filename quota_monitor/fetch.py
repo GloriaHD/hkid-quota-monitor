@@ -10,7 +10,7 @@ import json
 import sys
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 API_URL = "https://eservices.es2.immd.gov.hk/surgecontrolgate/ticket/getSituation"
@@ -46,10 +46,17 @@ def _fetch_once(timeout: int = TIMEOUT, retries: int = MAX_RETRIES) -> dict:
     raise RuntimeError(f"配额接口连续 {retries} 次失败: {last_err}")
 
 
+_HKT = timezone(timedelta(hours=8))
+
+
 def _update_ts(raw: dict) -> float:
-    """把 lastUpdateTime 解析成可比较的时间戳，解析不了当作最旧。"""
+    """把 lastUpdateTime（港时）解析成绝对时间戳，解析不了当作最旧。
+
+    必须显式带 tzinfo：早先按本机时区解析，在带夏令时的时区里跨越回拨
+    重叠窗口时会多算 60 分钟，足以误触安全阀（CI runner 是 UTC 不受影响，
+    但 fork 自建 runner 会踩）。"""
     try:
-        return datetime.strptime(raw["lastUpdateTime"], "%m/%d/%Y %H:%M:%S").timestamp()
+        return datetime.strptime(raw["lastUpdateTime"], "%m/%d/%Y %H:%M:%S")             .replace(tzinfo=_HKT).timestamp()
     except (KeyError, TypeError, ValueError):
         return 0.0
 
@@ -66,7 +73,7 @@ def source_ts(snap: dict) -> float:
 
 
 def fetch_raw(samples: int = 3, gap_sec: float = 3.0,
-              newer_than: float = 0.0) -> dict:
+              newer_than: float = float("inf")) -> dict:
     """取样若干次，返回 lastUpdateTime 最新的一份；一旦比 newer_than 新就提前收手。
 
     官方接口是多节点负载均衡，各节点缓存进度不同——实测同一分钟内两个节点
@@ -74,8 +81,11 @@ def fetch_raw(samples: int = 3, gap_sec: float = 3.0,
     表现为看板在两个状态间反复横跳、并与官方页面对不上。
 
     newer_than 传入「我们已有数据的时间戳」：第一次就抓到更新的数据即返回
-    （只花 1 个请求），只有打到旧节点时才继续补采去找新节点。这样既提高了
-    命中新数据的概率，平均请求数还比无脑采 3 次更低。"""
+    （只花 1 个请求），只有打到旧节点时才继续补采去找新节点——数据推进的
+    轮次因此只打 1 次请求。不传时默认 inf，即保持「采满 samples 次取最新」
+    的原语义（独立调用 python -m quota_monitor.fetch 走这条）。
+    注意提前收手的条件是「比现有新」而非「是最新的」：漏采多轮后两个节点
+    可能都比现有新，此时会锚定先打到的那个，下一轮再追上。"""
     best = _fetch_once()
     parsed_any = _update_ts(best) > 0
     if _update_ts(best) > newer_than:

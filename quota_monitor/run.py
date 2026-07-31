@@ -94,10 +94,13 @@ def _append_history(events: list[dict], now: datetime) -> None:
 
 def _write_meta(now: datetime, snap: dict, stale: bool = False,
                 events: int = 0, notify_worthy: int = 0) -> None:
-    """写新鲜度元信息。stale=True 表示本轮抓到的是旧节点、数据未推进，
-    但检查确实发生了——看板的「最近检查」仍应更新，不然会误报数据滞后。"""
+    """写新鲜度元信息。stale=True 表示本轮抓到旧节点、数据未推进，但检查
+    确实发生了；该轮是否真的落库由心跳决定（见 main 里的 heartbeat_due），
+    这样「本站检查」不会停在上次数据推进的时刻而误报滞后。"""
+    # 用 .get 而非硬下标：skip 分支传进来的是未经 validate_snapshot 的旧快照
     open_cells = sum(1 for off in snap.get("quota", {}).values()
-                     for d in off.values() if d["R"] in "gy" or d["K"] in "gy")
+                     for d in off.values()
+                     if d.get("R") in ("g", "y") or d.get("K") in ("g", "y"))
     (DATA / "meta.json").write_text(json.dumps({
         "last_check": now.isoformat(timespec="seconds"),
         "source_update_time": snap.get("source_update_time"),
@@ -106,6 +109,24 @@ def _write_meta(now: datetime, snap: dict, stale: bool = False,
         "notify_worthy": notify_worthy,
         "stale_node_skipped": stale,
     }, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def should_accept(prev_ts: float, new_ts: float,
+                  frozen_min: float) -> tuple[bool, str]:
+    """本轮抓到的快照要不要接受？返回 (是否接受, 原因码)。
+
+    抽成独立函数是为了能被测试直接调用——判定逻辑内联在 main 里时，
+    测试只能抄一遍条件，那种影子实现改坏了也不会红。
+    原因码：advanced=数据推进 / stale-valve=冻结太久放行对齐 /
+    no-baseline=无基线 / older=旧节点 / same=数据未推进
+    """
+    if not prev_ts or not new_ts:
+        return True, "no-baseline"
+    if new_ts > prev_ts:
+        return True, "advanced"
+    if frozen_min >= STALE_ACCEPT_MIN:
+        return True, "stale-valve"
+    return False, "same" if new_ts == prev_ts else "older"
 
 
 def _set_output(commit: bool) -> None:
@@ -140,25 +161,39 @@ def main() -> None:
     new = fetch_mod.normalize(fetch_mod.fetch_raw(newer_than=prev_ts))
     fetch_mod.validate_snapshot(new)  # 残缺数据在此抛异常，绝不落盘毒化快照链
 
-    # 数据只进不退：官方多节点缓存进度不同（实测同分钟内两节点差 9 分钟），
+    # 数据只进不退：官方多节点缓存进度不同（实测两节点相位差 6/9 分钟交替），
     # 打到旧节点时若照单全收，看板会在两个时间点的状态间反复横跳，还会产出
     # 「时光倒流」的虚假放号/关闭事件。不比现有更新的一律丢弃。
     new_ts = fetch_mod.source_ts(new)
-    # 安全阀：若已有数据本身太旧（官方改了时间戳格式、新节点下线等），
-    # 单调约束会让数据永久冻结——超过阈值就无条件接受，宁可抖动不可停摆
     now_src = fetch_mod.ts_of(now.strftime("%m/%d/%Y %H:%M:%S"))
     frozen_min = (now_src - prev_ts) / 60 if prev_ts and now_src else 0.0
-    if prev_ts and new_ts and new_ts <= prev_ts and frozen_min < STALE_ACCEPT_MIN:
-        why = "数据未更新" if new_ts == prev_ts else "抓到较旧节点"
-        print(f"skip: {why}（{new.get('source_update_time')} "
+    accept, why = should_accept(prev_ts, new_ts, frozen_min)
+
+    # 心跳同样适用于「本轮不更新」：否则看板的「本站检查」会停在上次数据推进
+    # 的时刻，官方冻结时会挂出「检查滞后」的假警报（其实每 2 分钟都在检查）
+    heartbeat_due = True
+    if prev_meta.get("last_check"):
+        try:
+            heartbeat_due = (now - datetime.fromisoformat(prev_meta["last_check"])
+                             ).total_seconds() / 60 >= HEARTBEAT_MIN
+        except (TypeError, ValueError):
+            heartbeat_due = True
+
+    if not accept:
+        label = "数据未推进" if why == "same" else "抓到较旧节点"
+        print(f"skip: {label}（{new.get('source_update_time')} "
               f"<= 现有 {old.get('source_update_time')}），本轮不更新")
         _write_meta(now, old, stale=True)
-        _set_output(False)
+        _set_output(heartbeat_due)
         return
-    if prev_ts and new_ts and new_ts <= prev_ts:
-        print(f"WARN 现有数据已冻结 {frozen_min:.0f} 分钟，放行本次抓取以免停摆")
 
-    events = diff_snapshots(old, new)
+    # 安全阀放行的是「比现有更旧」的数据，只用于重新对齐节点，
+    # 绝不能拿去 diff——那正是本要消灭的假放号事件，还会真发通知、污染历史统计
+    realign_only = why == "stale-valve"
+    if realign_only:
+        print(f"WARN 现有数据已冻结 {frozen_min:.0f} 分钟，放行本次抓取以重新对齐节点"
+              f"（本轮不产出事件、不通知）")
+    events = [] if realign_only else diff_snapshots(old, new)
 
     content_changed = old is None or (
         old.get("quota") != new["quota"] or old.get("dates") != new["dates"])
@@ -183,13 +218,6 @@ def main() -> None:
     _write_meta(now, new, stale=False, events=len(events),
                 notify_worthy=notify_worthy)
 
-    heartbeat_due = True
-    if prev_meta.get("last_check"):
-        try:
-            heartbeat_due = (now - datetime.fromisoformat(prev_meta["last_check"])
-                             ).total_seconds() / 60 >= HEARTBEAT_MIN
-        except (TypeError, ValueError):
-            heartbeat_due = True
     _set_output(content_changed or heartbeat_due)
     print(f"OK open_cells={open_cells} events={len(events)} "
           f"notify_worthy={notify_worthy} changed={content_changed}")

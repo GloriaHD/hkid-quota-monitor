@@ -269,7 +269,7 @@ def send_confirmation(user: str, pwd: str, addr: str, action: str, dry: bool,
         scope = prefs_desc or "全部办事处、全部日期"
         html = (f"<p>订阅成功！你的订阅范围：<b>{scope}</b>。"
                 f"范围内一有名额放出，会第一时间邮件通知你。</p>"
-                f"<p>想调整范围：重发一封订阅邮件写上新需求即可（如「订阅 只看港岛 九龙 2026-10-15之前」）。</p>"
+                f"<p>想调整范围：重发一封订阅邮件写上新需求即可（如「订阅 只看湾仔 长沙湾 2026-10-15之前」）。</p>"
                 f"<p>实时看板：<a href='{DASHBOARD}'>{DASHBOARD}</a></p>"
                 f"<p style='color:#999;font-size:12px'>想停止提醒：给本邮箱另发一封主题为「退订」的新邮件即可。"
                 f"第三方公益工具，非入境处官方服务。</p>")

@@ -129,7 +129,7 @@ def filter_events(events: list[dict], state: dict,
 
 
 def summarize(events: list[dict]) -> list[str]:
-    """按办事处聚合成人话行：港岛(湾仔)：09/02、09/03（少量）"""
+    """按办事处聚合成人话行：湾仔：09/02、09/03（少量）"""
     by_office: dict[str, list[dict]] = {}
     for e in events:
         by_office.setdefault(e["office"], []).append(e)

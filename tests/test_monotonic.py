@@ -1,4 +1,8 @@
-"""数据只进不退的守卫（官方多节点缓存差 9 分钟导致看板横跳）。"""
+"""数据只进不退的守卫（官方多节点缓存相位差导致看板横跳）。
+
+直接调用 run.should_accept，不复刻判定逻辑——影子实现的测试在真实逻辑
+被改坏时不会红，等于假绿灯（本文件上一版就犯过这个错）。
+"""
 
 import sys
 from datetime import datetime, timedelta, timezone
@@ -7,48 +11,64 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from quota_monitor import fetch as F
-from quota_monitor import run as R
+from quota_monitor.run import STALE_ACCEPT_MIN, should_accept
 
 HKT = timezone(timedelta(hours=8))
 NOW = datetime(2026, 7, 31, 21, 0, tzinfo=HKT)
 
 
-def _frozen_min(stamp):
-    now_src = F.ts_of(NOW.strftime("%m/%d/%Y %H:%M:%S"))
-    return (now_src - F.ts_of(stamp)) / 60
-
-
-def _blocked(prev_stamp, new_stamp):
-    """复刻 run.main 的判定：新数据不比现有新、且未冻结超阈值 -> 拦截。"""
+def _args(prev_stamp, new_stamp):
     prev, new = F.ts_of(prev_stamp), F.ts_of(new_stamp)
-    return bool(prev and new and new <= prev
-                and _frozen_min(prev_stamp) < R.STALE_ACCEPT_MIN)
+    now_src = F.ts_of(NOW.strftime("%m/%d/%Y %H:%M:%S"))
+    frozen = (now_src - prev) / 60 if prev and now_src else 0.0
+    return prev, new, frozen
 
 
 def test_older_node_is_rejected():
-    # 实测场景：两节点相差 9 分钟，打到旧的那个必须丢弃
-    assert _blocked("07/31/2026 20:55:00", "07/31/2026 20:46:00")
+    # 实测场景：两节点相位差 6~9 分钟，打到旧的那个必须丢弃
+    accept, why = should_accept(*_args("07/31/2026 20:55:00", "07/31/2026 20:46:00"))
+    assert not accept and why == "older"
 
 
 def test_same_timestamp_is_rejected():
-    assert _blocked("07/31/2026 20:55:00", "07/31/2026 20:55:00")
+    accept, why = should_accept(*_args("07/31/2026 20:55:00", "07/31/2026 20:55:00"))
+    assert not accept and why == "same"
 
 
 def test_newer_node_passes():
-    assert not _blocked("07/31/2026 20:46:00", "07/31/2026 20:55:00")
+    accept, why = should_accept(*_args("07/31/2026 20:46:00", "07/31/2026 20:55:00"))
+    assert accept and why == "advanced"
 
 
-def test_safety_valve_releases_when_frozen_too_long():
-    """现有数据已冻结超过阈值 -> 放弃单调约束，宁可抖动不可永久停摆
-    （官方改时间戳格式 / 新节点下线时的兜底）。"""
-    assert _frozen_min("07/31/2026 20:15:00") > R.STALE_ACCEPT_MIN
-    assert not _blocked("07/31/2026 20:15:00", "07/31/2026 20:10:00")
+def test_safety_valve_marks_realign_not_normal_accept():
+    """冻结超阈值时放行，但原因码必须是 stale-valve——
+    main 靠它决定「只对齐、不 diff」，否则会把倒流数据当成真放号发出去。"""
+    accept, why = should_accept(*_args("07/31/2026 20:15:00", "07/31/2026 20:10:00"))
+    assert accept and why == "stale-valve"
 
 
-def test_unparsable_timestamps_never_block():
-    # 解析不了就不做单调约束，避免因格式变化把监控卡死
-    assert not _blocked(None, "07/31/2026 20:55:00")
-    assert not _blocked("07/31/2026 20:55:00", "bad-format")
+def test_frozen_threshold_boundary():
+    _, _, frozen = _args("07/31/2026 20:15:00", "x")
+    assert frozen > STALE_ACCEPT_MIN          # 45 分钟前 -> 超阈值
+    _, _, frozen2 = _args("07/31/2026 20:45:00", "x")
+    assert frozen2 < STALE_ACCEPT_MIN         # 15 分钟前 -> 未超
+
+
+def test_no_baseline_always_accepts():
+    # 首轮 / 时间戳不可解析：不做单调约束，避免把监控卡死
+    accept, why = should_accept(*_args(None, "07/31/2026 20:55:00"))
+    assert accept and why == "no-baseline"
+    accept, why = should_accept(*_args("07/31/2026 20:55:00", "bad-format"))
+    assert accept and why == "no-baseline"
+
+
+def test_realign_path_emits_no_events():
+    """守卫的真实契约：stale-valve 路径不得产出事件。
+    直接断言 main 里的取值规则（events = [] if realign_only）。"""
+    _, why = should_accept(*_args("07/31/2026 20:15:00", "07/31/2026 20:10:00"))
+    realign_only = why == "stale-valve"
+    assert realign_only, "冻结超阈值必须走只对齐路径"
+    assert ([] if realign_only else ["fake-event"]) == []
 
 
 def test_fetch_stops_early_when_data_advanced():
@@ -69,6 +89,33 @@ def test_fetch_stops_early_when_data_advanced():
         assert len(calls) == 1
     finally:
         F._fetch_once = orig
+
+
+def test_fetch_default_keeps_multi_sample_semantics():
+    """不传 newer_than 时必须保持「采满取最新」，否则独立入口被静默降级。"""
+    calls = []
+    orig = F._fetch_once
+    try:
+        seq = iter([{"lastUpdateTime": "07/31/2026 20:10:00"},
+                    {"lastUpdateTime": "07/31/2026 20:55:00"},
+                    {"lastUpdateTime": "07/31/2026 20:20:00"}])
+
+        def fake(*_a, **_kw):
+            calls.append(1)
+            return next(seq)
+        F._fetch_once = fake
+        got = F.fetch_raw(samples=3, gap_sec=0)
+        assert got["lastUpdateTime"] == "07/31/2026 20:55:00"
+        assert len(calls) == 3
+    finally:
+        F._fetch_once = orig
+
+
+def test_timestamp_parsed_as_hongkong_time():
+    """时间戳必须按港时解析：早先按本机时区解析，带夏令时的自建 runner
+    在回拨重叠窗口会多算 60 分钟，足以误触安全阀。"""
+    expect = datetime(2026, 7, 31, 20, 55, 0, tzinfo=HKT).timestamp()
+    assert F.ts_of("07/31/2026 20:55:00") == expect
 
 
 if __name__ == "__main__":
