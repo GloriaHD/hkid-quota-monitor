@@ -184,7 +184,8 @@ var OWNER_REPO = "chen1111-a/hkid-quota-monitor";
 var SUBSCRIBE_EMAIL = REPO === OWNER_REPO ? "2037445294@qq.com" : "";
 var FEISHU_GROUP_URL = REPO === OWNER_REPO
   ? "https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=726v4702-ecda-452b-9c61-3b9b4d0d5cb6" : "";  // 飞书群分享链接（配置后按钮自动出现）
-var OFFICE_SHORT = { FTO: "火炭", RHK: "港岛", RKO: "九龙", RTK: "将军澳", TMO: "屯门", YLO: "元朗" };
+/* 用官方预约系统显示的地区名（接口 district 字段），与官网对得上 */
+var OFFICE_SHORT = { RHK: "湾仔", RKO: "长沙湾", RTK: "将军澳", FTO: "火炭", TMO: "屯门", YLO: "元朗" };
 var OFFICE_ORDER = ["RHK", "RKO", "RTK", "FTO", "TMO", "YLO"];
 var WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
 var DATA_URLS = [
@@ -275,9 +276,22 @@ function render() {
   var last = lastIso ? new Date(lastIso) : null;
   var ageMin = last ? Math.round((Date.now() - last.getTime()) / 60000) : null;
   var freshEl = document.getElementById("fresh");
-  freshEl.innerHTML = "官方数据 <b>" + esc(meta.source_update_time || d.source_update_time || "?") + "</b>（港时）· 数据入库 " +
-    (ageMin === null ? "?" : ageMin <= 0 ? "刚刚" : ageMin + " 分钟前") +
-    (ageMin !== null && ageMin > 30 ? ' <span class="stale">⚠ 数据可能滞后</span>' : "");
+  var srcRaw = meta.source_update_time || d.source_update_time || "";
+  var srcAge = null;
+  var m = /^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})$/.exec(srcRaw);
+  if (m) {
+    // 官方时间戳是港时（UTC+8），换算成绝对时刻后再和本机时间比
+    var srcMs = Date.parse(m[3] + "-" + m[1] + "-" + m[2] + "T" +
+                           m[4] + ":" + m[5] + ":" + m[6] + "+08:00");
+    if (!isNaN(srcMs)) srcAge = Math.round((Date.now() - srcMs) / 60000);
+  }
+  var rel = function (n) { return n === null ? "?" : n <= 0 ? "刚刚" : n + " 分钟前"; };
+  freshEl.innerHTML = "官方数据 <b>" + esc(srcRaw || "?") + "</b>（港时，" + rel(srcAge) +
+    "）· 本站检查 " + rel(ageMin) +
+    (srcAge !== null && srcAge > 20
+      ? ' <span class="stale">⚠ 官方数据本身较旧，与官网可能有出入</span>'
+      : ageMin !== null && ageMin > 30
+      ? ' <span class="stale">⚠ 本站检查滞后</span>' : "");
 
   /* 分级提醒横幅：紧急/提醒窗口内有名额时显性提示 */
   var bannerEl = document.getElementById("banner");

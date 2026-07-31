@@ -29,6 +29,7 @@ HKT = timezone(timedelta(hours=8))
 DATA = Path("data")
 MIN_INTERVAL_MIN = 1.5   # 频率护栏：外部触发器抖动/重叠时的下限
 HEARTBEAT_MIN = 20
+STALE_ACCEPT_MIN = 30    # 数据冻结超过此分钟数则放弃单调约束，避免永久停摆
 
 
 def _read_json(path: Path) -> dict | None:
@@ -91,6 +92,22 @@ def _append_history(events: list[dict], now: datetime) -> None:
         print(f"history +{len(fresh)} open events")
 
 
+def _write_meta(now: datetime, snap: dict, stale: bool = False,
+                events: int = 0, notify_worthy: int = 0) -> None:
+    """写新鲜度元信息。stale=True 表示本轮抓到的是旧节点、数据未推进，
+    但检查确实发生了——看板的「最近检查」仍应更新，不然会误报数据滞后。"""
+    open_cells = sum(1 for off in snap.get("quota", {}).values()
+                     for d in off.values() if d["R"] in "gy" or d["K"] in "gy")
+    (DATA / "meta.json").write_text(json.dumps({
+        "last_check": now.isoformat(timespec="seconds"),
+        "source_update_time": snap.get("source_update_time"),
+        "open_cells": open_cells,
+        "events_this_run": events,
+        "notify_worthy": notify_worthy,
+        "stale_node_skipped": stale,
+    }, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
 def _set_output(commit: bool) -> None:
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
@@ -118,9 +135,29 @@ def main() -> None:
 
     quota_path = DATA / "quota.json"
     old = _read_json(quota_path)
+    prev_ts = fetch_mod.source_ts(old) if old else 0.0
 
-    new = fetch_mod.normalize(fetch_mod.fetch_raw())
+    new = fetch_mod.normalize(fetch_mod.fetch_raw(newer_than=prev_ts))
     fetch_mod.validate_snapshot(new)  # 残缺数据在此抛异常，绝不落盘毒化快照链
+
+    # 数据只进不退：官方多节点缓存进度不同（实测同分钟内两节点差 9 分钟），
+    # 打到旧节点时若照单全收，看板会在两个时间点的状态间反复横跳，还会产出
+    # 「时光倒流」的虚假放号/关闭事件。不比现有更新的一律丢弃。
+    new_ts = fetch_mod.source_ts(new)
+    # 安全阀：若已有数据本身太旧（官方改了时间戳格式、新节点下线等），
+    # 单调约束会让数据永久冻结——超过阈值就无条件接受，宁可抖动不可停摆
+    now_src = fetch_mod.ts_of(now.strftime("%m/%d/%Y %H:%M:%S"))
+    frozen_min = (now_src - prev_ts) / 60 if prev_ts and now_src else 0.0
+    if prev_ts and new_ts and new_ts <= prev_ts and frozen_min < STALE_ACCEPT_MIN:
+        why = "数据未更新" if new_ts == prev_ts else "抓到较旧节点"
+        print(f"skip: {why}（{new.get('source_update_time')} "
+              f"<= 现有 {old.get('source_update_time')}），本轮不更新")
+        _write_meta(now, old, stale=True)
+        _set_output(False)
+        return
+    if prev_ts and new_ts and new_ts <= prev_ts:
+        print(f"WARN 现有数据已冻结 {frozen_min:.0f} 分钟，放行本次抓取以免停摆")
+
     events = diff_snapshots(old, new)
 
     content_changed = old is None or (
@@ -142,15 +179,9 @@ def main() -> None:
 
     open_cells = sum(1 for off in new["quota"].values()
                      for d in off.values() if d["R"] in "gy" or d["K"] in "gy")
-    meta = {
-        "last_check": now_iso,
-        "source_update_time": new.get("source_update_time"),
-        "open_cells": open_cells,
-        "events_this_run": len(events),
-        "notify_worthy": sum(1 for e in events if e["type"] in ("quota_open", "new_date")),
-    }
-    (DATA / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1),
-                                    encoding="utf-8")
+    notify_worthy = sum(1 for e in events if e["type"] in ("quota_open", "new_date"))
+    _write_meta(now, new, stale=False, events=len(events),
+                notify_worthy=notify_worthy)
 
     heartbeat_due = True
     if prev_meta.get("last_check"):
@@ -161,7 +192,7 @@ def main() -> None:
             heartbeat_due = True
     _set_output(content_changed or heartbeat_due)
     print(f"OK open_cells={open_cells} events={len(events)} "
-          f"notify_worthy={meta['notify_worthy']} changed={content_changed}")
+          f"notify_worthy={notify_worthy} changed={content_changed}")
 
 
 if __name__ == "__main__":

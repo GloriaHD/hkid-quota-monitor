@@ -57,7 +57,7 @@ def test_summarize_groups_by_office():
                        ev(office="RHK", date="2026-09-02")])
     assert len(lines) == 2
     assert lines[0].startswith("火炭：") and "09/08(少量)" in lines[0] and "09/09(充足)" in lines[0]
-    assert lines[1].startswith("港岛(湾仔)：")
+    assert lines[1].startswith("湾仔：")
 
 
 CFG = {"urgent_before": "2026-09-01", "notice_before": "2026-09-15"}

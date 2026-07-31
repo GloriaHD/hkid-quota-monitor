@@ -54,14 +54,32 @@ def _update_ts(raw: dict) -> float:
         return 0.0
 
 
-def fetch_raw(samples: int = 3, gap_sec: float = 3.0) -> dict:
-    """取样多次，采用 lastUpdateTime 最新的一份。
+def ts_of(stamp: str | None) -> float:
+    """官方时间戳字符串 -> 可比较的数值（不可解析时为 0）。
+    注意：只用于同口径的相互比较，不是绝对时刻。"""
+    return _update_ts({"lastUpdateTime": stamp})
 
-    官方接口是多节点负载均衡，各节点缓存进度不同——实测同一时刻不同节点
-    的数据可差 2 分钟以上（表现为配额格反复横跳）。单次取样有概率打到旧节点，
-    导致我们比别人晚发现放号；取两次挑最新的一份能显著削掉这段落后。"""
+
+def source_ts(snap: dict) -> float:
+    """规范化快照的官方数据时间戳（不可解析时为 0）。"""
+    return ts_of(snap.get("source_update_time"))
+
+
+def fetch_raw(samples: int = 3, gap_sec: float = 3.0,
+              newer_than: float = 0.0) -> dict:
+    """取样若干次，返回 lastUpdateTime 最新的一份；一旦比 newer_than 新就提前收手。
+
+    官方接口是多节点负载均衡，各节点缓存进度不同——实测同一分钟内两个节点
+    的数据可相差 9 分钟，命中各约 50%。单次取样有一半概率打到旧节点，
+    表现为看板在两个状态间反复横跳、并与官方页面对不上。
+
+    newer_than 传入「我们已有数据的时间戳」：第一次就抓到更新的数据即返回
+    （只花 1 个请求），只有打到旧节点时才继续补采去找新节点。这样既提高了
+    命中新数据的概率，平均请求数还比无脑采 3 次更低。"""
     best = _fetch_once()
     parsed_any = _update_ts(best) > 0
+    if _update_ts(best) > newer_than:
+        return best
     for _ in range(max(0, samples - 1)):
         time.sleep(gap_sec)
         try:
@@ -73,6 +91,8 @@ def fetch_raw(samples: int = 3, gap_sec: float = 3.0) -> dict:
         parsed_any = parsed_any or _update_ts(cand) > 0
         if _update_ts(cand) > _update_ts(best):
             best = cand
+        if _update_ts(best) > newer_than:
+            break  # 已拿到比现有更新的数据，不必再打请求
     if samples > 1 and not parsed_any:
         print("WARN lastUpdateTime 全部无法解析，多取样已退化为单取样（官方可能改了格式）")
     return best

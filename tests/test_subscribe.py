@@ -92,7 +92,7 @@ DIY_BODY = ("订阅香港ID放号提醒（个性化）。\n"
 
 
 def test_parse_prefs_offices_and_date():
-    p = parse_prefs("订阅 只看港岛 九龙 2026-10-15之前")
+    p = parse_prefs("订阅 只看湾仔 长沙湾 2026-10-15之前")
     assert p == {"offices": ["RHK", "RKO"], "before": "2026-10-15"}
     assert parse_prefs("只要将军澳 2026年9月1日前")["before"] == "2026-09-01"
     assert parse_prefs("湾仔 2026/9/5")["offices"] == ["RHK"]  # 别名+斜杠日期
@@ -121,7 +121,7 @@ def test_apply_change_prefs_update_and_describe():
     subs, did = apply_change(subs, "a@b.com", "subscribe", NOW, {"offices": ["TMO"]})
     assert did and subs[0]["offices"] == ["TMO"] and "before" not in subs[0]
     assert describe_prefs({"offices": ["RHK", "RKO"], "before": "2026-10-01"}) == \
-        "只看：港岛、九龙；只要 2026-10-01 之前的名额"
+        "只看：湾仔、长沙湾；只要 2026-10-01 之前的名额"
     assert describe_prefs({}) == "全部办事处、全部日期"
 
 

@@ -32,8 +32,10 @@ HKT = timezone(timedelta(hours=8))
 DATA = Path("data")
 STATE_PATH = DATA / "notify_state.json"
 
-OFFICE_NAMES = {"FTO": "火炭", "RHK": "港岛(湾仔)", "RKO": "九龙", "RTK": "将军澳",
-                "TMO": "屯门", "YLO": "元朗"}
+# 用官方预约系统显示的地区名（接口 district 字段），别用「港岛办事处」这类
+# 内部称谓——用户在官网看到的是「湾仔」「长沙湾」，对不上会以为是两套数据
+OFFICE_NAMES = {"RHK": "湾仔", "RKO": "长沙湾", "RTK": "将军澳",
+                "FTO": "火炭", "TMO": "屯门", "YLO": "元朗"}
 STATUS_TEXT = {"g": "充足", "y": "少量"}
 # fork 自部署时链接自动指向自己的仓库（CI 注入 GITHUB_REPOSITORY）
 REPO = os.environ.get("GITHUB_REPOSITORY", "chen1111-a/hkid-quota-monitor")
