@@ -6,9 +6,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from quota_monitor.notify import (check_feishu_body, compose, event_matches,
-                                  filter_events, in_monitor_window,
-                                  load_alert_cfg, summarize, tier_of)
+from quota_monitor.notify import (build_feishu_card, check_feishu_body,
+                                  cn_date, compose, earliest_line,
+                                  event_matches, filter_events,
+                                  in_monitor_window, load_alert_cfg, summarize,
+                                  tier_of)
 
 HKT = timezone(timedelta(hours=8))
 T0 = datetime(2026, 7, 30, 12, 0, tzinfo=HKT)
@@ -239,6 +241,215 @@ def test_send_feishu_actually_calls_the_check():
             os.environ.pop("FEISHU_WEBHOOK", None)
         else:
             os.environ["FEISHU_WEBHOOK"] = orig_hook
+
+
+CFG_TIERS = {"monitor_before": "2026-09-16", "urgent_before": "2026-09-01",
+             "notice_before": "2026-09-16"}
+
+
+def test_cn_date_and_bad_config_passthrough():
+    assert cn_date("2026-09-01") == "9月1日"
+    assert cn_date("2026-12-15") == "12月15日"
+    # config 是网页可编的不可信输入：格式不对只准降级显示，不准炸掉通知
+    assert cn_date("9/1/2026") == "9/1/2026"
+    assert cn_date(None) == "近期"
+    assert cn_date("") == "近期"
+
+
+def test_earliest_line_picks_the_single_most_actionable_fact():
+    evs = [ev(office="FTO", date="2026-09-08"),
+           ev(office="RHK", date="2026-08-22", to="g"),
+           ev(office="TMO", date="2026-09-01")]
+    assert earliest_line(evs) == "湾仔 08/22 （充足）"
+    assert earliest_line([ev(office="TMO", date="2026-08-30", session="K")]) \
+        == "屯门 08/30 延长时段 （少量）"
+    assert earliest_line([]) == ""
+
+
+def test_card_tier_drives_color_and_at_all():
+    """红/橙/蓝三档一眼可分；@所有人只在 urgent 出现——
+    每条都 @ 全员会被当噪声屏蔽，那样急件也没人看了。"""
+    def dump(tier):
+        c = build_feishu_card(["**湾仔**：09/02(少量)"], 1, tier, CFG_TIERS, 1, "湾仔 09/02")
+        import json as _j
+        return c["header"]["template"], c["header"]["title"]["content"], \
+            _j.dumps(c["elements"], ensure_ascii=False)
+
+    color, title, body = dump("urgent")
+    assert color == "red" and "9月1日前" in title and "速抢" in title
+    assert "<at id=all></at>" in body
+
+    color, title, body = dump("notice")
+    assert color == "orange" and "9月16日前" in title
+    assert "<at id=all>" not in body
+
+    color, _, body = dump("info")
+    assert color == "blue" and "<at id=all>" not in body
+
+
+def test_card_explains_count_mismatch():
+    """标题只报本档数量、列表是全部——「说 2 个却列了 3 行」看着像 bug，必须说明。"""
+    import json as _j
+    both = _j.dumps(build_feishu_card(["a", "b", "c"], 2, "urgent", CFG_TIERS, 3,
+                                      "湾仔 08/22")["elements"], ensure_ascii=False)
+    assert "本轮共 3 个，其中 2 个在9月1日前" in both
+    same = _j.dumps(build_feishu_card(["a"], 1, "urgent", CFG_TIERS, 1, "x")
+                    ["elements"], ensure_ascii=False)
+    assert "本轮共" not in same, "数量一致时不该多这句废话"
+    # info 档的定义就是落在 notice_before 之外，说「其中 N 个在X前」自相矛盾
+    info = _j.dumps(build_feishu_card(["a"], 1, "info", CFG_TIERS, 3, "")
+                    ["elements"], ensure_ascii=False)
+    assert "本轮共" not in info
+
+
+def test_card_always_carries_booking_button_and_disclaimer():
+    c = build_feishu_card([], 0, "info", {}, 0, "")
+    import json as _j
+    body = _j.dumps(c["elements"], ensure_ascii=False)
+    assert "立即去官网预约" in body and "gov.hk" in body
+    assert "不代抢代约" in body      # goal.md 不变量 1：只监控不代抢
+
+
+def _fake_feishu(codes):
+    """按 codes 顺序返回飞书响应，记录每次实际发出的 payload。
+    元素给 int 表示只设 code，给 str 表示整个返回体自定（用来造 log_id 之类）。"""
+    sent = []
+
+    class _Resp:
+        def __init__(self, code):
+            self.status, self._code = 200, code
+
+        def read(self, n=None):
+            if isinstance(self._code, str):
+                return self._code.encode()
+            return ('{"code":%d,"msg":"x"}' % self._code).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    it = iter(codes)
+
+    def fake(req, *a, **kw):
+        import json as _j
+        sent.append(_j.loads(req.data.decode()))
+        return _Resp(next(it))
+    return fake, sent
+
+
+def test_card_reject_falls_back_to_plain_text():
+    """卡片 schema 归飞书管，哪天字段改了也不能让这条通道整个哑掉。
+    实测过：畸形 card 回 code 11246，退回纯文本后送达成功。"""
+    import os
+    from quota_monitor import notify as N
+    fake, sent = _fake_feishu([11246, 0])
+    orig, hook = N.urllib.request.urlopen, os.environ.get("FEISHU_WEBHOOK")
+    os.environ["FEISHU_WEBHOOK"] = "https://open.feishu.cn/open-apis/bot/v2/hook/x"
+    N.urllib.request.urlopen = fake
+    try:
+        N.send_feishu(["**湾仔**：09/02(少量)"], 1, dry=False, tier="notice",
+                      cfg=CFG_TIERS, n_top=1, events=[ev(date="2026-09-02")])
+    finally:
+        N.urllib.request.urlopen = orig
+        os.environ.pop("FEISHU_WEBHOOK", None) if hook is None \
+            else os.environ.update(FEISHU_WEBHOOK=hook)
+    assert [p["msg_type"] for p in sent] == ["interactive", "text"]
+    assert "**" not in sent[1]["content"]["text"], "纯文本里不该出现 lark_md 星号"
+    assert "最早可约" in sent[1]["content"]["text"]
+
+
+def _send_with_fake(codes, **kw):
+    """在桩掉 urlopen 的前提下跑一次 send_feishu，返回 (发出的 payload 列表, 异常)。"""
+    import os
+    from quota_monitor import notify as N
+    fake, sent = _fake_feishu(codes)
+    orig, hook = N.urllib.request.urlopen, os.environ.get("FEISHU_WEBHOOK")
+    os.environ["FEISHU_WEBHOOK"] = "https://open.feishu.cn/open-apis/bot/v2/hook/x"
+    N.urllib.request.urlopen = fake
+    err = None
+    try:
+        N.send_feishu(**kw)
+    except Exception as e:      # noqa: BLE001 - 交给调用方断言
+        err = e
+    finally:
+        N.urllib.request.urlopen = orig
+        if hook is None:
+            os.environ.pop("FEISHU_WEBHOOK", None)
+        else:
+            os.environ["FEISHU_WEBHOOK"] = hook
+    return sent, err
+
+
+def test_urgent_fallback_still_ats_everyone():
+    """触发兜底的场景（飞书改了卡片字段）会是持续性的——@所有人 若只活在
+    卡片里，届时所有紧急提醒都静默沉底。兜底必须是降级版，不是精简版。"""
+    sent, err = _send_with_fake(
+        [11246, 0], lines=["**湾仔**：08/22(充足)"], n=3, dry=False, tier="urgent",
+        cfg=CFG_TIERS, n_top=2, events=[ev(office="RHK", date="2026-08-22", to="g")])
+    assert err is None and len(sent) == 2
+    # 顺带钉住 n_top/n_all 的接线：这两个整数语义相反、类型相同，
+    # 在调用点写反不会报错，只会静默播出错误数字（标题会变成「放出 3 个」）
+    title = sent[0]["card"]["header"]["title"]["content"]
+    assert "放出 2 个名额" in title, f"标题该报本档数 2 而非总数 3：{title}"
+    txt = sent[1]["content"]["text"]
+    assert "<at user_id=\"all\">" in txt, "兜底丢了 @所有人"
+    assert "本轮共 3 个，其中 2 个在9月1日前" in txt, "兜底丢了数量说明"
+    assert "不代抢代约" in txt                      # goal.md 不变量 1
+
+
+def test_log_id_containing_19001_does_not_kill_the_channel():
+    """错误码必须从结构化字段取。飞书返回体常带 log_id 这类长数字串，
+    从 str(e) 里捞子串会把「可恢复的卡片被拒」误升级成整条通道失败。"""
+    body = '{"code":11246,"msg":"parse card json err","log_id":"0219001883745"}'
+    sent, err = _send_with_fake([body, 0], lines=["x"], n=1, dry=False,
+                                tier="info", cfg={}, n_top=1)
+    assert err is None, f"不该抛：{err}"
+    assert [p["msg_type"] for p in sent] == ["interactive", "text"]
+
+
+def test_hostile_office_id_cannot_forge_at_all():
+    """officeId 直接来自上游接口且不校验格式，原样进 lark_md 就能伪造
+    @所有人 / 假系统提示。邮件走 html.escape、看板走 esc()，卡片不能是漏网的。"""
+    bad = "<at id=all></at>【系统】"
+    line = summarize([ev(office=bad)], md=True)[0]
+    assert "<at" not in line and "【" not in line
+    early = earliest_line([ev(office=bad)])                   # 只剩中英数字
+    assert "<" not in early and ">" not in early and "=" not in early
+    import json as _j
+    card = _j.dumps(build_feishu_card(summarize([ev(office=bad)], md=True), 1,
+                                      "notice", CFG_TIERS, 1,
+                                      earliest_line([ev(office=bad)])),
+                    ensure_ascii=False)
+    assert "<at id=all>" not in card
+
+
+def test_bad_token_does_not_trigger_a_wasted_second_send():
+    """19001 是 token/权限问题，退化重发一样被拒——白发一次还拖慢邮件。"""
+    import os
+    from quota_monitor import notify as N
+    fake, sent = _fake_feishu([19001, 0])
+    orig, hook = N.urllib.request.urlopen, os.environ.get("FEISHU_WEBHOOK")
+    os.environ["FEISHU_WEBHOOK"] = "https://open.feishu.cn/open-apis/bot/v2/hook/x"
+    N.urllib.request.urlopen = fake
+    try:
+        N.send_feishu(["x"], 1, dry=False, tier="info", cfg={}, n_top=1)
+    except RuntimeError as e:
+        assert "19001" in str(e)
+    else:
+        raise AssertionError("坏 token 必须抛出")
+    finally:
+        N.urllib.request.urlopen = orig
+        os.environ.pop("FEISHU_WEBHOOK", None) if hook is None \
+            else os.environ.update(FEISHU_WEBHOOK=hook)
+    assert len(sent) == 1, f"坏 token 只该发一次，实际 {len(sent)} 次"
+
+
+def test_summarize_md_only_bolds_when_asked():
+    evs = [ev(office="RHK", date="2026-09-02")]
+    assert summarize(evs) == ["湾仔：09/02(少量)"]
+    assert summarize(evs, md=True) == ["**湾仔**：09/02(少量)"]
 
 
 def test_send_emails_missing_creds_is_a_failure_not_silent_success():

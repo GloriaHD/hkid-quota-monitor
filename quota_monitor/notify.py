@@ -134,8 +134,19 @@ def filter_events(events: list[dict], state: dict,
     return out
 
 
-def summarize(events: list[dict]) -> list[str]:
-    """按办事处聚合成人话行：湾仔：09/02、09/03（少量）"""
+def office_name(off: str) -> str:
+    """办事处代码转显示名。白名单外的一律只留中英数字：officeId 直接来自上游
+    接口（fetch.normalize 不校验格式），原样落进飞书 lark_md 就能伪造
+    <at id=all> 假 @所有人或假系统提示。邮件走 html.escape、看板走 esc()，
+    卡片这条新链路是唯一漏网的 sink。"""
+    if off in OFFICE_NAMES:
+        return OFFICE_NAMES[off]
+    return re.sub(r"[^0-9A-Za-z一-鿿]", "", off)[:16] or "未知办事处"
+
+
+def summarize(events: list[dict], md: bool = False) -> list[str]:
+    """按办事处聚合成人话行：湾仔：09/02、09/03（少量）。
+    md=True 时办事处名加粗（飞书卡片用 lark_md，邮件走 compose 的 HTML）。"""
     by_office: dict[str, list[dict]] = {}
     for e in events:
         by_office.setdefault(e["office"], []).append(e)
@@ -148,7 +159,9 @@ def summarize(events: list[dict]) -> list[str]:
             tag = STATUS_TEXT.get(e["to"], e["to"])
             sess = "延长时段" if e["session"] == "K" else ""
             parts.append(f"{d}{sess}({tag})")
-        lines.append(f"{OFFICE_NAMES.get(off, off)}：{'、'.join(parts)}")
+        name = office_name(off)
+        lines.append(f"**{name}**：{'、'.join(parts)}" if md
+                     else f"{name}：{'、'.join(parts)}")
     return lines
 
 
@@ -256,8 +269,109 @@ def send_emails(payloads: list[tuple[str, str, str]], dry: bool) -> None:
     print(f"email sent -> {sent} ok, {failed} failed")
 
 
+class FeishuError(RuntimeError):
+    """带结构化 code 的飞书失败。上层要按 code 分流（19001 不重发、其余退纯文本），
+    从格式化后的消息里 `"19001" in str(e)` 反解会被返回体里的 log_id 等
+    无关数字误命中，把「可恢复的卡片被拒」升级成整条通道失败。
+    继承 RuntimeError：main 的双通道容错和既有调用点无需改。"""
+
+    def __init__(self, code, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def cn_date(iso: str | None) -> str:
+    """2026-09-01 -> 9月1日。阈值来自网页可编的 config，格式不对就原样退回，
+    宁可标题难看也不能让通知在字符串格式化上炸掉。"""
+    m = re.match(r"^\d{4}-(\d{2})-(\d{2})$", iso or "")
+    return f"{int(m.group(1))}月{int(m.group(2))}日" if m else (iso or "近期")
+
+
+def earliest_line(events: list[dict]) -> str:
+    """最早那个可约日期的一句话。抢名额时人只需要先看这一条，
+    所以它单独占一行加粗，而不是埋在按办事处分组的列表里。
+    同日 R/K 都放号时优先报一般时段——延长时段是少数人才要的，
+    放在最显眼那行会误导多数人。"""
+    if not events:
+        return ""
+    e = min(events, key=lambda x: (x["date"], x["session"] != "R", x["office"]))
+    d = e["date"][5:].replace("-", "/")
+    sess = "延长时段 " if e["session"] == "K" else ""
+    return (f'{office_name(e["office"])} {d} '
+            f'{sess}（{STATUS_TEXT.get(e["to"], e["to"])}）')
+
+
+_TIER_CARD = {"urgent": ("red", "🚨"), "notice": ("orange", "🔔"),
+              "info": ("blue", "🎫")}
+DISCLAIMER = "第三方公益工具，非入境处官方服务 · 只做监控提醒，不代抢代约"
+
+
+def _count_note(n_all: int, n_top: int, tier: str, cfg: dict) -> str:
+    deadline = cn_date(cfg.get("urgent_before" if tier == "urgent"
+                               else "notice_before"))
+    return f"本轮共 {n_all} 个，其中 {n_top} 个在{deadline}前"
+
+
+def build_feishu_card(lines: list[str], n_top: int, tier: str, cfg: dict,
+                      n_all: int, earliest: str = "") -> dict:
+    """卡片而非纯文本：群消息流里纯文本会被划过去，带色头的卡片
+    一眼能分出「9月1日前的红色急件」和「普通提醒」。
+
+    参数顺序刻意与 build_email_html 对齐（n_top=档内数在前，n_all=总数在后）：
+    两个同形状的姊妹构造函数若把语义相反的整数放在对调的槽位上，
+    调用方写反不会报错，只会静默播出错误数字——这类回归本文件出过。"""
+    color, icon = _TIER_CARD.get(tier, _TIER_CARD["info"])
+    if tier == "urgent":
+        title = f"{icon} {cn_date(cfg.get('urgent_before'))}前放出 {n_top} 个名额 · 速抢"
+    elif tier == "notice":
+        title = f"{icon} {cn_date(cfg.get('notice_before'))}前放出 {n_top} 个名额"
+    else:
+        title = f"{icon} 检测到 {n_all} 个香港ID预约名额"
+
+    elements: list[dict] = []
+    if tier == "urgent":
+        # @所有人需群机器人开启「允许 @ 所有人」；未开启时飞书按普通文本展示，不报错
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content":
+                         "<at id=all></at> 名额常在几分钟内被抢完，现在就点下面的按钮"}})
+    if earliest:
+        elements.append({"tag": "div", "text": {"tag": "lark_md",
+                                                "content": f"**最早可约：{earliest}**"}})
+    if lines:
+        elements.append({"tag": "div", "text": {"tag": "lark_md",
+                                                "content": "\n".join(lines)}})
+    # 标题只报本档数量，列表却是全部——不说明的话「说 2 个却列了 3 行」很像 bug。
+    # info 档没有截止日可言（它的定义就是落在 notice_before 之外），说了反而自相矛盾
+    if n_all != n_top and tier != "info":
+        elements.append({"tag": "note", "elements": [{"tag": "plain_text",
+                         "content": _count_note(n_all, n_top, tier, cfg)}]})
+    elements += [
+        {"tag": "action", "actions": [
+            {"tag": "button", "text": {"tag": "plain_text", "content": "立即去官网预约"},
+             "url": BOOKING, "type": "primary"},
+            {"tag": "button", "text": {"tag": "plain_text", "content": "查看实时看板"},
+             "url": DASHBOARD, "type": "default"},
+        ]},
+        {"tag": "note", "elements": [{"tag": "plain_text", "content": DISCLAIMER}]},
+    ]
+    return {"config": {"wide_screen_mode": True},
+            "header": {"template": color,
+                       "title": {"tag": "plain_text", "content": title}},
+            "elements": elements}
+
+
+def _post_feishu(hook: str, payload: dict) -> None:
+    body = json.dumps(payload, ensure_ascii=False).encode()
+    req = urllib.request.Request(hook, data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        raw = resp.read(65536).decode("utf-8", "replace")
+        status = resp.status
+    check_feishu_body(status, raw)
+
+
 def send_feishu(lines: list[str], n: int, dry: bool, tier: str = "info",
-                cfg: dict | None = None, n_top: int | None = None) -> None:
+                cfg: dict | None = None, n_top: int | None = None,
+                events: list[dict] | None = None) -> None:
     hook = os.environ.get("FEISHU_WEBHOOK", "")
     if not hook:
         print("skip feishu: no webhook")
@@ -267,27 +381,33 @@ def send_feishu(lines: list[str], n: int, dry: bool, tier: str = "info",
         return
     cfg = cfg or {}
     n_top = n if n_top is None else n_top
-    if tier == "urgent":
-        # @所有人需群机器人开启「允许 @ 所有人」，未开启时飞书按普通文本展示
-        headline = (f'<at user_id="all">所有人</at> 🚨 '
-                    f"{cfg.get('urgent_before', '近期')} 前有 {n_top} 个名额放出，速抢")
-    elif tier == "notice":
-        headline = f"🔔 {cfg.get('notice_before', '近期')} 前有 {n_top} 个名额放出"
-    else:
-        headline = f"🎫 检测到 {n} 个香港ID预约名额放出"
-    text = (headline + "\n" + "\n".join(lines) +
-            f"\n\n官方预约：{BOOKING}\n实时看板：{DASHBOARD}")
+    earliest = earliest_line(events or [])
+    card = build_feishu_card(lines, n_top, tier, cfg, n, earliest)
+    # 纯文本兜底：卡片 schema 是飞书说了算的，哪天字段改了也不能让这条通道整个哑掉。
+    # 兜底必须是「同样一条消息的降级版」而非精简版——触发它的场景（飞书改了卡片
+    # 字段）会是持续性的，@所有人 一旦只活在卡片里，届时紧急提醒会全部静默沉底
+    at_all = '<at user_id="all">所有人</at> ' if tier == "urgent" else ""
+    note = (f"\n（{_count_note(n, n_top, tier, cfg)}）"
+            if n != n_top and tier != "info" else "")
+    head = card["header"]["title"]["content"]
+    text = (at_all + (f"{head}\n最早可约：{earliest}\n" if earliest else f"{head}\n")
+            # 去掉 lark_md 的加粗记号——纯文本消息里它会原样显示成星号
+            + "\n".join(ln.replace("**", "") for ln in lines) + note +
+            f"\n\n官方预约：{BOOKING}\n实时看板：{DASHBOARD}\n{DISCLAIMER}")
     if dry:
-        print(f"[DRY] feishu:\n{text}")
+        print(f"[DRY] feishu card:\n{json.dumps(card, ensure_ascii=False, indent=1)}")
+        print(f"[DRY] feishu text fallback:\n{text}")   # 兜底也要能被演练看见
         return
-    body = json.dumps({"msg_type": "text", "content": {"text": text}}).encode()
-    req = urllib.request.Request(hook, data=body,
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        raw = resp.read(4096).decode("utf-8", "replace")
-        status = resp.status
-    check_feishu_body(status, raw)
-    print(f"feishu sent: HTTP {status}")
+    try:
+        _post_feishu(hook, {"msg_type": "interactive", "card": card})
+        print("feishu sent: card ok")
+        return
+    except FeishuError as e:
+        if e.code == 19001:
+            raise      # token/权限问题，退化重发一样被拒，白发一次还拖慢邮件
+        print(f"WARN 飞书卡片被拒（{e}），退回纯文本重发")
+    _post_feishu(hook, {"msg_type": "text", "content": {"text": text}})
+    print("feishu sent: text fallback ok")
 
 
 def check_feishu_body(status: int, raw: str) -> None:
@@ -302,8 +422,8 @@ def check_feishu_body(status: int, raw: str) -> None:
     except (ValueError, AttributeError):
         return
     if code not in (0, None):
-        raise RuntimeError(f"feishu rejected (HTTP {status}, code={code}): "
-                           f"{raw[:200]}")
+        raise FeishuError(code, f"feishu rejected (HTTP {status}, code={code}): "
+                                f"{raw[:200]}")
 
 
 def main() -> None:
@@ -365,7 +485,8 @@ def main() -> None:
     tier_n = all_tiers.count(tier)
     # 飞书优先：webhook 约 1 秒送达，SMTP 群发要几十秒——抢名额时这段差距是决定性的
     ok = 0
-    for send in (lambda: send_feishu(summarize(fresh), n, dry, tier, cfg, tier_n),
+    for send in (lambda: send_feishu(summarize(fresh, md=True), n, dry, tier,
+                                     cfg, tier_n, fresh),
                  lambda: send_emails(payloads, dry)):
         try:
             send()
