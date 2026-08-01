@@ -176,8 +176,10 @@ def load_subscribers() -> list[dict]:
         from cryptography.fernet import Fernet
         raw = Fernet(key.encode()).decrypt(enc.read_bytes())
         subs = json.loads(raw.decode().rstrip())  # 去掉 save_roster 的定长填充
+        # 白名单式取字段：漏了哪个键，那个偏好会静默失效（订阅者收到
+        # 他明确说不要的推送）。subscribe.PREF_KEYS 变更时这里必须同步
         return [{"email": s["email"], "offices": s.get("offices"),
-                 "before": s.get("before")}
+                 "before": s.get("before"), "on": s.get("on")}
                 for s in subs if s.get("email") and s.get("active", True)]
     except Exception as e:  # noqa: BLE001 - 订阅表坏了不该阻塞管理员通知
         print(f"WARN subscribers decrypt failed: {e}")
@@ -188,6 +190,10 @@ def event_matches(sub: dict, e: dict) -> bool:
     """个性化过滤：订阅者未设的维度不过滤。"""
     if sub.get("offices") and e["office"] not in sub["offices"]:
         return False
+    # on = 锁定到某几天，比 before 更严格，两者都设时以 on 为准：
+    # 用户特意点了某一天，就是不想收那天以外的任何东西
+    if sub.get("on"):
+        return e["date"] in sub["on"]
     if sub.get("before") and e["date"] >= sub["before"]:
         return False
     return True

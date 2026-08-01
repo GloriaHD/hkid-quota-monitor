@@ -169,6 +169,109 @@ def test_roster_padding_hides_subscriber_count():
         S.ENC_PATH = orig
 
 
+def test_parse_prefs_single_day_lock():
+    """滚轮 DIY 的「就这一天」：只有指定日期放号才通知。"""
+    p = parse_prefs("订阅香港ID放号提醒（个性化）。\n就这一天放号才通知：2026-08-31\n")
+    assert p.get("on") == ["2026-08-31"] and "before" not in p
+    # 多个日期、多种写法、去重排序
+    p = parse_prefs("指定日期：2026年8月31日 2026/09/02 2026-08-31")
+    assert p.get("on") == ["2026-08-31", "2026-09-02"]
+
+
+def test_parse_prefs_on_and_before_coexist():
+    """同一封信里两种写法各归各：逐行判定，不能全文 search 只取第一个日期。"""
+    p = parse_prefs("就这一天放号才通知：2026-08-31\n只要这天之前的名额：2026-09-15\n")
+    assert p.get("on") == ["2026-08-31"]
+    assert p.get("before") == "2026-09-15"
+
+
+def test_parse_prefs_old_template_still_means_before():
+    """老模板那行也含「这天」——判定顺序错了会把存量订阅者的截止日改成单日锁。"""
+    p = parse_prefs("只看办事处：湾仔\n只要这天之前的名额：2026-10-15\n")
+    assert p.get("before") == "2026-10-15" and "on" not in p
+    # 裸日期（没有任何标记）沿用老语义
+    assert parse_prefs("2026-10-15").get("before") == "2026-10-15"
+    # 一行里两种标记都有（如「指定日期之前」）：之前 优先——说"之前"的人
+    # 显然要的是范围，误判成单日锁会让他漏掉整个区间的推送
+    p = parse_prefs("指定日期之前的名额都要：2026-10-15")
+    assert p.get("before") == "2026-10-15" and "on" not in p
+
+
+def test_parse_prefs_on_bad_date_falls_back():
+    p = parse_prefs("就这一天：2026-02-30")     # 非法日期整个丢弃
+    assert "on" not in p and "before" not in p
+    p = parse_prefs("就这一天：2026-02-30 2026-08-31")   # 只丢非法的那个
+    assert p.get("on") == ["2026-08-31"]
+
+
+def test_event_matches_on_beats_before():
+    """on 比 before 更严格，两者都设时以 on 为准。"""
+    from quota_monitor.notify import event_matches
+    sub = {"email": "a@b.com", "on": ["2026-08-31"], "before": "2026-09-15"}
+    hit = {"office": "RHK", "date": "2026-08-31"}
+    miss = {"office": "RHK", "date": "2026-09-01"}   # before 放行但 on 不放行
+    assert event_matches(sub, hit)
+    assert not event_matches(sub, miss)
+    # 只设 before 的老订阅者行为不变
+    old = {"email": "a@b.com", "before": "2026-09-15"}
+    assert event_matches(old, miss)
+
+
+def test_apply_change_updates_on_prefs():
+    """重发订阅邮件=覆盖偏好，on 也要跟着增删，不能残留旧锁定日。"""
+    subs, ch = apply_change([], "a@b.com", "subscribe", NOW,
+                            {"on": ["2026-08-31"]})
+    assert ch and subs[0]["on"] == ["2026-08-31"]
+    subs, ch = apply_change(subs, "a@b.com", "subscribe", NOW,
+                            {"before": "2026-09-15"})
+    assert ch and "on" not in subs[0] and subs[0]["before"] == "2026-09-15"
+    # 相同偏好重发 = 幂等
+    subs, ch = apply_change(subs, "a@b.com", "subscribe", NOW,
+                            {"before": "2026-09-15"})
+    assert not ch
+
+
+def test_describe_prefs_mentions_on():
+    s = describe_prefs({"on": ["2026-08-31"], "offices": ["RHK"]})
+    assert "2026-08-31" in s and "湾仔" in s and "这天放号" in s
+
+
+def test_describe_prefs_matches_filter_semantics_when_both_set():
+    """确认信是用户唯一核对机制，回显必须与 event_matches 实际行为一致：
+    on 屏蔽 before 时不能把 before 说成还生效——那等于核对机制说谎。"""
+    s = describe_prefs({"on": ["2026-08-31"], "before": "2026-09-15"})
+    assert "以指定日为准" in s and "不生效" in s
+    # 单独 before 不受影响
+    assert describe_prefs({"before": "2026-09-15"}) == "只要 2026-09-15 之前的名额"
+
+
+def test_on_pref_survives_roster_roundtrip():
+    """接线测试：邮件解析 → 名册加密落盘 → notify 解密读取 → 过滤。
+    load_subscribers 是白名单式取字段，漏了 on 键整条新功能会静默失效
+    （测各环节的单元测试全绿，订阅者却照收他明确说不要的推送）。"""
+    import os
+    import tempfile
+    from pathlib import Path as P
+    from cryptography.fernet import Fernet
+    from quota_monitor import notify as N
+    from quota_monitor import subscribe as S
+    os.environ["SUBSCRIBER_KEY"] = Fernet.generate_key().decode()
+    tmp = P(tempfile.mkdtemp())
+    orig_s, orig_n = S.ENC_PATH, N.DATA
+    try:
+        S.ENC_PATH = tmp / "subscribers.json.enc"
+        N.DATA = tmp
+        prefs = parse_prefs("就这一天放号才通知：2026-08-31")
+        subs, _ = apply_change([], "a@b.com", "subscribe", NOW, prefs)
+        S.save_roster(subs)
+        loaded = N.load_subscribers()
+        assert loaded and loaded[0]["on"] == ["2026-08-31"]
+        assert N.event_matches(loaded[0], {"office": "RHK", "date": "2026-08-31"})
+        assert not N.event_matches(loaded[0], {"office": "RHK", "date": "2026-09-01"})
+    finally:
+        S.ENC_PATH, N.DATA = orig_s, orig_n
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

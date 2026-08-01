@@ -125,6 +125,70 @@ footer a { color: var(--ink-2); }
 .banner.urgent { background: var(--crit); color: #fff; }
 .banner.notice { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn); }
 .banner small { display: block; font-weight: 400; opacity: .85; }
+
+/* ---------- DIY 订阅面板（滚轮选日期） ---------- */
+#diyMask {
+  display: none; position: fixed; inset: 0; z-index: 50;
+  background: rgba(0, 0, 0, .45); align-items: flex-end; justify-content: center;
+}
+#diyMask.on { display: flex; }
+.sheet {
+  width: 100%; max-width: 420px; background: var(--card); color: var(--ink);
+  border-radius: 16px 16px 0 0; padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
+  max-height: 92vh; overflow-y: auto;
+  animation: rise .22s cubic-bezier(.32, .72, 0, 1);
+}
+@keyframes rise { from { transform: translateY(14px); opacity: .6; } }
+@media (min-width: 560px) {
+  #diyMask { align-items: center; }
+  .sheet { border-radius: 16px; }
+}
+.sheetTop { display: flex; align-items: center; margin-bottom: 12px; }
+.sheetTop b { flex: 1; font-size: 16px; }
+.sheetTop button {
+  border: none; background: none; font-size: 14px; cursor: pointer; padding: 4px 2px;
+  color: var(--ink-3);
+}
+.sheetTop button.go { color: var(--accent); font-weight: 700; }
+.fieldLab { font-size: 12px; color: var(--ink-3); margin: 12px 0 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink-2);
+  border-radius: 999px; padding: 5px 12px; font-size: 13px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; transition: background .15s, color .15s, border-color .15s;
+}
+.chip.on { background: var(--accent); color: #fff; border-color: transparent; }
+.seg { display: flex; gap: 6px; }
+.seg button {
+  flex: 1; border: 1px solid var(--line); background: var(--bg); color: var(--ink-2);
+  border-radius: 9px; padding: 8px 0; font-size: 13px; cursor: pointer;
+}
+.seg button.on { background: var(--accent); color: #fff; border-color: transparent; font-weight: 600; }
+.wheels { position: relative; display: flex; gap: 8px; height: 180px; margin-top: 4px; }
+.wheel {
+  flex: 1; overflow-y: scroll; scroll-snap-type: y mandatory; text-align: center;
+  -webkit-overflow-scrolling: touch; scrollbar-width: none; -ms-overflow-style: none;
+  overscroll-behavior: contain;
+}
+.wheel::-webkit-scrollbar { display: none; }
+.wheel .it {
+  height: 36px; line-height: 36px; scroll-snap-align: center;
+  font-size: 15px; color: var(--ink-3); font-variant-numeric: tabular-nums;
+  transition: color .12s, font-size .12s;
+}
+.wheel .it.sel { color: var(--ink); font-weight: 700; font-size: 18px; }
+.wheel .pad { height: 72px; }
+.wheelBar {
+  position: absolute; left: 0; right: 0; top: 72px; height: 36px; pointer-events: none;
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  background: rgba(11, 87, 208, .06); border-radius: 6px;
+}
+:root[data-theme="dark"] .wheelBar { background: rgba(138, 180, 248, .10); }
+.sheetPreview {
+  margin-top: 12px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 9px; padding: 9px 10px; font-size: 12px; color: var(--ink-2); line-height: 1.6;
+}
+.sheetPreview b { color: var(--ink); }
 </style>
 </head>
 <body>
@@ -163,6 +227,7 @@ footer a { color: var(--ink-2); }
     <a class="btn plain" id="ghLink" target="_blank" rel="noopener" href="">GitHub</a>
   </div>
   <div id="subArea"><!-- Phase 5: 订阅入口 --></div>
+  <div id="diyMask"><!-- DIY 订阅面板，openDiy() 首次打开时填充 --></div>
 
   <footer>
     第三方公益工具，数据来自入境处公开配额查询接口，每约 2 分钟检测一次，请以
@@ -447,16 +512,236 @@ document.getElementById("onlyOpen").onchange = function () {
     '<div class="subCard"><p>放号往往几分钟内被抢完——订阅后第一时间提醒你</p>' +
     '<div class="subBtns">' + btns.join("") + "</div>" +
     (SUBSCRIBE_EMAIL ? '<div class="subHint">点按钮发送一封邮件即完成订阅（全程国内网络直连），约 2 分钟内收到确认邮件</div>' +
-      '<div class="subHint"><a style="color:var(--accent);text-decoration:none" href="mailto:' + SUBSCRIBE_EMAIL +
-      "?subject=" + encodeURIComponent("订阅香港ID放号提醒") +
-      "&amp;body=" + encodeURIComponent(
-        "订阅香港ID放号提醒（个性化）。\n" +
-        "只看办事处：湾仔 长沙湾 将军澳 火炭 屯门 元朗 ←把不要的删掉\n" +
-        "只要这天之前的名额：2027-12-31 ←改成你的截止日期\n" +
-        "（两行都不改 = 订阅全部）") +
-      '">🎯 想只看特定办事处或日期？点此个性化订阅（DIY）</a></div>' : "") +
+      '<div class="subHint"><a id="diyBtn" style="color:var(--accent);text-decoration:none;cursor:pointer">🎯 想只看特定办事处或某一天？点此个性化订阅（DIY）</a></div>' : "") +
     "</div>";
+  var diy = document.getElementById("diyBtn");
+  if (diy) diy.addEventListener("click", openDiy);
 })();
+
+/* ---------- DIY 面板：办事处多选 + 年月日滚轮 ----------
+   为什么不用 <input type="date">：安卓各家浏览器的原生日期控件差异极大，
+   部分国产内核干脆弹不出来；而这个入口是订阅的最后一步，弹不出来 = 掉订阅。
+   自绘滚轮用 scroll-snap 实现，滑动惯性交给浏览器，无依赖。 */
+var DIY_OFFICES = ["湾仔", "长沙湾", "将军澳", "火炭", "屯门", "元朗"];
+var IT_H = 36;                 /* 与 .wheel .it 的 height 必须一致 */
+var diyState = { mode: "on", y: 0, m: 0, d: 0, offices: {} };
+
+function daysIn(y, m) { return new Date(y, m, 0).getDate(); }
+function pad2(n) { return (n < 10 ? "0" : "") + n; }
+
+function buildWheel(el, items, sel, onPick) {
+  el.innerHTML = '<div class="pad"></div>' +
+    items.map(function (v) { return '<div class="it">' + esc(String(v)) + "</div>"; }).join("") +
+    '<div class="pad"></div>';
+  var its = el.querySelectorAll(".it");
+  function mark(i) {
+    for (var k = 0; k < its.length; k++) its[k].className = "it" + (k === i ? " sel" : "");
+  }
+  var idx = Math.max(0, items.indexOf(sel));
+  mark(idx);
+  el.scrollTop = idx * IT_H;
+  /* 定时器挂在元素上：年/月联动重建日轮时必须掐掉旧轮的 pending 防抖，
+     否则旧 timer 会拿旧 items 回写状态，绕过月末夹取造出 2026-02-31 */
+  clearTimeout(el._t);
+  /* 确定按钮要同步现算，不等防抖（见 wheelValue） */
+  el._items = items;
+  el.onscroll = function () {
+    clearTimeout(el._t);
+    el._t = setTimeout(function () {
+      var i = Math.round(el.scrollTop / IT_H);
+      i = Math.min(items.length - 1, Math.max(0, i));
+      mark(i);
+      onPick(items[i]);
+    }, 90);
+  };
+  /* 点哪一行就滚到哪一行——桌面端用鼠标滚轮对齐很别扭。
+     必须瞬时对齐 + 同步落状态，不能用 smooth：平滑动画要几百毫秒，
+     点完立刻按确定时 syncDiyFromWheels 会读到动画中途的 scrollTop，
+     把刚点的日期覆盖成中间值（真浏览器 E2E 抓到过） */
+  el.onclick = function (e) {
+    var row = e.target.closest(".it");
+    if (!row) return;
+    var i = Array.prototype.indexOf.call(its, row);
+    mark(i);
+    onPick(items[i]);
+    el.scrollTop = i * IT_H;
+  };
+}
+
+function wheelValue(id) {
+  /* 从滚轮当前 scrollTop 同步现算选中值。「滚完/点完立刻按确定」时防抖
+     还没落盘（点击对齐的平滑动画 + 90ms，窗口足有半秒），diyState 是旧值；
+     on 语义严格，锁错一天 = 目标日零通知，所以确定那一刻必须现算 */
+  var el = document.getElementById(id);
+  var i = Math.round(el.scrollTop / IT_H);
+  i = Math.min(el._items.length - 1, Math.max(0, i));
+  return el._items[i];
+}
+
+function syncDiyFromWheels() {
+  diyState.y = wheelValue("wY");
+  diyState.m = wheelValue("wM");
+  diyState.d = wheelValue("wD");
+  var max = daysIn(diyState.y, diyState.m);
+  if (diyState.d > max) diyState.d = max;
+}
+
+function renderDayWheel() {
+  var max = daysIn(diyState.y, diyState.m);
+  if (diyState.d > max) diyState.d = max;      /* 1/31 切到 2 月要夹回来 */
+  var days = [];
+  for (var i = 1; i <= max; i++) days.push(i);
+  buildWheel(document.getElementById("wD"), days, diyState.d, function (v) {
+    diyState.d = v; renderDiyPreview();
+  });
+}
+
+function diyDate() {
+  return diyState.y + "-" + pad2(diyState.m) + "-" + pad2(diyState.d);
+}
+
+function diyPickedOffices() {
+  return DIY_OFFICES.filter(function (o) { return diyState.offices[o]; });
+}
+
+function renderDiyPreview() {
+  var offs = diyPickedOffices();
+  var all = offs.length === DIY_OFFICES.length || offs.length === 0;
+  var when = diyState.mode === "on"
+    ? "只有 <b>" + esc(diyDate()) + "</b> 这一天放号才通知你"
+    : "只要是 <b>" + esc(diyDate()) + "</b> 之前的名额就通知你";
+  var warn = "";
+  /* 监测窗口在个性化过滤之前全局生效：锁定窗口外的日期=永远不会有通知。
+     滚轮又允许选到任何一天，不在这里拦一句，「就这一天才通知」会静默
+     变成「永远不通知」——功能承诺的直接反面 */
+  var mb = state.cfg && state.cfg.monitor_before;
+  if (mb && diyState.mode === "on" && diyDate() >= mb) {
+    warn = '<br><span style="color:var(--crit-ink)">⚠️ 本站只监测 ' + esc(mb) +
+      " 之前的名额，选这一天不会收到任何通知</span>";
+  }
+  document.getElementById("diyPreview").innerHTML =
+    "订阅后：" + (all ? "全部办事处" : "只看 <b>" + esc(offs.join("、")) + "</b>") +
+    "，" + when + "。" + warn;
+}
+
+function diyMailto() {
+  var offs = diyPickedOffices();
+  var body = "订阅香港ID放号提醒（个性化）。\n";
+  if (offs.length && offs.length < DIY_OFFICES.length) {
+    body += "只看办事处：" + offs.join(" ") + "\n";
+  }
+  body += diyState.mode === "on"
+    ? "就这一天放号才通知：" + diyDate() + "\n"
+    : "只要这天之前的名额：" + diyDate() + "\n";
+  body += "（这封信直接发出即可，不用改）";
+  return "mailto:" + SUBSCRIBE_EMAIL + "?subject=" +
+    encodeURIComponent("订阅香港ID放号提醒") + "&body=" + encodeURIComponent(body);
+}
+
+function closeDiy() {
+  document.getElementById("diyMask").classList.remove("on");
+  document.removeEventListener("keydown", diyEsc);
+}
+function diyEsc(e) { if (e.key === "Escape") closeDiy(); }
+
+function openDiy() {
+  var mask = document.getElementById("diyMask");
+  var firstOpen = !mask.dataset.built;
+  if (firstOpen) {
+    mask.innerHTML =
+      '<div class="sheet" role="dialog" aria-modal="true" aria-label="个性化订阅">' +
+      '<div class="sheetTop"><b>个性化订阅</b>' +
+      '<button type="button" id="diyCancel">取消</button>' +
+      '<button type="button" class="go" id="diyOk" style="margin-left:14px">确定</button></div>' +
+      '<div class="fieldLab">只看哪些办事处（不选 = 全部）</div>' +
+      '<div class="chips" id="diyChips"></div>' +
+      '<div class="fieldLab">日期怎么算</div>' +
+      '<div class="seg"><button type="button" data-mode="on">就这一天</button>' +
+      '<button type="button" data-mode="before">这天及之前</button></div>' +
+      '<div class="fieldLab">滑动选择日期</div>' +
+      '<div class="wheels"><div class="wheelBar"></div>' +
+      '<div class="wheel" id="wY"></div><div class="wheel" id="wM"></div>' +
+      '<div class="wheel" id="wD"></div></div>' +
+      '<div class="sheetPreview" id="diyPreview"></div></div>';
+    mask.dataset.built = "1";
+
+    mask.addEventListener("click", function (e) { if (e.target === mask) closeDiy(); });
+    document.getElementById("diyCancel").addEventListener("click", closeDiy);
+    document.getElementById("diyOk").addEventListener("click", function () {
+      syncDiyFromWheels();   // 防抖可能还没落盘，确定那一刻以滚轮实际位置为准
+      closeDiy();
+      location.href = diyMailto();
+    });
+    document.querySelectorAll(".seg button").forEach(function (b) {
+      b.addEventListener("click", function () {
+        diyState.mode = b.dataset.mode;
+        document.querySelectorAll(".seg button").forEach(function (x) {
+          x.className = x.dataset.mode === diyState.mode ? "on" : "";
+        });
+        renderDiyPreview();
+      });
+    });
+
+    var chips = document.getElementById("diyChips");
+    chips.innerHTML = DIY_OFFICES.map(function (o) {
+      return '<span class="chip" data-o="' + esc(o) + '">' + esc(o) + "</span>";
+    }).join("");
+    chips.addEventListener("click", function (e) {
+      var c = e.target.closest(".chip");
+      if (!c) return;
+      var o = c.dataset.o;
+      diyState.offices[o] = !diyState.offices[o];
+      c.className = "chip" + (diyState.offices[o] ? " on" : "");
+      renderDiyPreview();
+    });
+  }
+
+  /* 默认停在「最早那个还有名额的日期」——用户开面板多半就是冲它来的。
+     数据没加载出来时退回今天，绝不能因为这个便利功能把面板卡住。
+     只在首次打开播种：误关重开时办事处/模式都保留，唯独日期被重播会
+     显得像 bug（用户刚滚到的那天没了） */
+  if (firstOpen) {
+    var seed = (function () {
+      var d = state.data;
+      if (d && d.dates) {
+        for (var i = 0; i < d.dates.length; i++) {
+          for (var k = 0; k < OFFICE_ORDER.length; k++) {
+            /* cellOf 返回 {best, plusK}，不是原始 {R, K}——读错属性条件恒假，
+               整个「停在最早有名额日」会静默退化成停在首日（审计抓到过） */
+            var c = cellOf(d.quota, OFFICE_ORDER[k], d.dates[i]);
+            if (c && (c.best === "g" || c.best === "y")) return d.dates[i];
+          }
+        }
+        if (d.dates.length) return d.dates[0];
+      }
+      var t = new Date();
+      return t.getFullYear() + "-" + pad2(t.getMonth() + 1) + "-" + pad2(t.getDate());
+    })();
+    var sp = seed.split("-");
+    diyState.y = +sp[0]; diyState.m = +sp[1]; diyState.d = +sp[2];
+  }
+
+  /* 先显示再建滚轮：display:none 时元素不可滚动，buildWheel 里的
+     scrollTop 赋值会被静默丢弃——滚轮视觉停在第 1 行、状态却记着种子日，
+     用户第一次滑动后两边就对不上（真浏览器 E2E 抓到过） */
+  mask.classList.add("on");
+  document.addEventListener("keydown", diyEsc);
+
+  var years = [diyState.y, diyState.y + 1];
+  var months = [];
+  for (var i = 1; i <= 12; i++) months.push(i);
+  buildWheel(document.getElementById("wY"), years, diyState.y, function (v) {
+    diyState.y = v; renderDayWheel(); renderDiyPreview();
+  });
+  buildWheel(document.getElementById("wM"), months, diyState.m, function (v) {
+    diyState.m = v; renderDayWheel(); renderDiyPreview();
+  });
+  renderDayWheel();
+  document.querySelectorAll(".seg button").forEach(function (x) {
+    x.className = x.dataset.mode === diyState.mode ? "on" : "";
+  });
+  renderDiyPreview();
+}
 
 /* ---------- 调度自证：直读 GitHub Actions 公开审计 API ---------- */
 function fetchProof() {

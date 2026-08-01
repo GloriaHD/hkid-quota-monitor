@@ -47,6 +47,19 @@ OFFICE_ALIASES = {
 OFFICE_CN = {"RHK": "湾仔", "RKO": "长沙湾", "RTK": "将军澳",
              "FTO": "火炭", "TMO": "屯门", "YLO": "元朗"}
 _DATE_RE = re.compile(r"(20\d{2})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})")
+# 「就这一天」的写法。之前/以前 优先级更高：老模板那行「只要这天之前的名额」
+# 也含「这天」，若不先排除会把所有老订阅者的截止日静默改成单日锁定
+_ON_MARK = re.compile(r"(就这|仅这|只这|指定日期|当天|这一天|这几天|这天放号)")
+_BEFORE_MARK = re.compile(r"(之前|以前)")
+MAX_ON_DATES = 20
+
+
+def _iso(m: re.Match) -> str | None:
+    from datetime import date
+    try:
+        return date(int(m[1]), int(m[2]), int(m[3])).isoformat()
+    except ValueError:
+        return None       # 2026-02-30 之类：丢掉这一个，不影响其余偏好
 
 
 def parse_prefs(text: str) -> dict:
@@ -54,29 +67,51 @@ def parse_prefs(text: str) -> dict:
     绝不因用户写法而丢订阅。
 
     - offices: 文本中提到的办事处（全部 6 个都提到 = 不过滤，兼容模板默认全清单）
-    - before : 截止日期，只要这天之前的名额（支持 2026-10-15 / 2026/10/15 / 2026年10月15日）
+    - before : 截止日期，只要这天之前的名额（2026-10-15 / 2026/10/15 / 2026年10月15日）
+    - on     : 指定的某几天，只有这些日子放号才通知（「就这一天：2026-08-31」）
+
+    逐行判定而非全文搜索：一封信里可能同时出现两种写法，全文 search 只会
+    取到第一个日期，用户写的另一半会被无声吞掉。
     """
     prefs: dict = {}
     hits = [oid for oid, names in OFFICE_ALIASES.items()
             if any(n in text for n in names)]
     if hits and len(hits) < len(OFFICE_ALIASES):
         prefs["offices"] = sorted(hits)
-    m = _DATE_RE.search(text)
-    if m:
-        try:
-            from datetime import date
-            prefs["before"] = date(int(m[1]), int(m[2]), int(m[3])).isoformat()
-        except ValueError:
-            pass
+
+    on: list[str] = []
+    before: str | None = None
+    for line in text.splitlines():
+        isos = [d for d in (_iso(m) for m in _DATE_RE.finditer(line)) if d]
+        if not isos:
+            continue
+        # 没有任何标记的裸日期沿用老语义（截止日）：老模板就是这么写的，
+        # 改判成单日锁定会让存量订阅者的推送范围突然缩到一天
+        if _ON_MARK.search(line) and not _BEFORE_MARK.search(line):
+            on += isos
+        elif before is None:
+            before = isos[0]
+    if on:
+        prefs["on"] = sorted(set(on))[:MAX_ON_DATES]
+    if before:
+        prefs["before"] = before
     return prefs
 
 
 def describe_prefs(prefs: dict) -> str:
-    """把偏好翻译成人话，确认信里回显给用户核对。"""
+    """把偏好翻译成人话，确认信里回显给用户核对。
+    确认信是用户唯一的核对机制，回显必须与 notify.event_matches 的实际
+    行为一致：on 和 before 并存时 on 屏蔽 before，不能把被忽略的 before
+    说成还生效——那等于核对机制自己说谎。"""
     parts = []
     if prefs.get("offices"):
         parts.append("只看：" + "、".join(OFFICE_CN.get(o, o) for o in prefs["offices"]))
-    if prefs.get("before"):
+    if prefs.get("on"):
+        parts.append("只要这天放号才通知：" + "、".join(prefs["on"]))
+        if prefs.get("before"):
+            parts.append(f"（你同时写了截止日 {prefs['before']}，两者并存时"
+                         f"以指定日为准，截止日不生效）")
+    elif prefs.get("before"):
         parts.append(f"只要 {prefs['before']} 之前的名额")
     return "；".join(parts) if parts else "全部办事处、全部日期"
 
@@ -167,8 +202,10 @@ def apply_change(subs: list[dict], addr: str, action: str,
         return subs, False
     existing = next((s for s in subs if s.get("email") == addr), None)
 
+    PREF_KEYS = ("offices", "before", "on")
+
     def _set_prefs(rec: dict) -> None:
-        for k in ("offices", "before"):
+        for k in PREF_KEYS:
             if prefs.get(k):
                 rec[k] = prefs[k]
             else:
@@ -176,8 +213,7 @@ def apply_change(subs: list[dict], addr: str, action: str,
 
     if action == "subscribe":
         if existing:
-            same_prefs = (existing.get("offices") == prefs.get("offices")
-                          and existing.get("before") == prefs.get("before"))
+            same_prefs = all(existing.get(k) == prefs.get(k) for k in PREF_KEYS)
             if existing.get("active", True) and same_prefs:
                 return subs, False
             existing["active"] = True
