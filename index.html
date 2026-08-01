@@ -548,6 +548,9 @@ function buildWheel(el, items, sel, onPick) {
   el.onscroll = function () {
     clearTimeout(el._t);
     el._t = setTimeout(function () {
+      /* 面板切页会整块替换 DOM，pending 回调若照跑，脱离文档的元素
+         scrollTop 恒为 0，会把用户刚选的日期改写成第 1 行 */
+      if (!el.isConnected) return;
       var i = Math.round(el.scrollTop / IT_H);
       i = Math.min(items.length - 1, Math.max(0, i));
       mark(i);
@@ -619,12 +622,14 @@ function renderDiyPreview() {
     warn = '<br><span style="color:var(--crit-ink)">⚠️ 本站只监测 ' + esc(mb) +
       " 之前的名额，选这一天不会收到任何通知</span>";
   }
-  document.getElementById("diyPreview").innerHTML =
+  var box = document.getElementById("diyPreview");
+  /* 进入第二步后选择页 DOM 已被替换，pending 的滚轮防抖回调仍会触发到这里 */
+  if (box) box.innerHTML =
     "订阅后：" + (all ? "全部办事处" : "只看 <b>" + esc(offs.join("、")) + "</b>") +
     "，" + when + "。" + warn;
 }
 
-function diyMailto() {
+function diyBody() {
   var offs = diyPickedOffices();
   var body = "订阅香港ID放号提醒（个性化）。\n";
   if (offs.length && offs.length < DIY_OFFICES.length) {
@@ -634,8 +639,76 @@ function diyMailto() {
     ? "就这一天放号才通知：" + diyDate() + "\n"
     : "只要这天之前的名额：" + diyDate() + "\n";
   body += "（这封信直接发出即可，不用改）";
+  return body;
+}
+
+function diyMailto() {
   return "mailto:" + SUBSCRIBE_EMAIL + "?subject=" +
-    encodeURIComponent("订阅香港ID放号提醒") + "&body=" + encodeURIComponent(body);
+    encodeURIComponent("订阅香港ID放号提醒") + "&body=" + encodeURIComponent(diyBody());
+}
+
+function copyBtn(id, getText) {
+  /* 复制按钮：clipboard API 失败（老内核/被策略禁）退回 textarea 方案，
+     再失败按钮直接显示失败——绝不能默默装作复制成功 */
+  var b = document.getElementById(id);
+  if (!b) return;
+  b.addEventListener("click", function () {
+    var t = getText();
+    function ok() { b.textContent = "✓ 已复制"; setTimeout(function () { b.textContent = b.dataset.lab; }, 1600); }
+    function fallback() {
+      var ta = document.createElement("textarea");
+      ta.value = t; ta.style.cssText = "position:fixed;opacity:0";
+      document.body.appendChild(ta); ta.select();
+      var done = false;
+      try { done = document.execCommand("copy"); } catch (e) { /* noop */ }
+      document.body.removeChild(ta);
+      if (done) ok(); else b.textContent = "复制失败，请长按选择";
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(ok, fallback);
+    } else fallback();
+  });
+}
+
+function showDiyStep2() {
+  /* 确定后不直接跳 mailto：一部分用户的默认邮件程序没配好（点了没反应，
+     或跳进一个空白写信页要手填收件人），直接跳走=流程断在最后一步还没提示。
+     这一屏把「打开邮件 App」和「手动复制去任意邮箱」两条路都摆出来 */
+  var sheet = document.querySelector("#diyMask .sheet");
+  sheet.innerHTML =
+    '<div class="sheetTop"><b>最后一步：发出这封邮件</b>' +
+    '<button type="button" id="diyBack">返回修改</button></div>' +
+    '<div class="sheetPreview" id="diyStep2Sum"></div>' +
+    /* href 拼进 innerHTML，& 按本文件惯例写成 &amp;（属性值会解码回来） */
+    '<div style="margin-top:12px"><a class="btn primary" style="display:block" id="diyMailBtn" href="' +
+    diyMailto().replace(/&/g, "&amp;") + '">📮 打开邮件 App，直接点发送</a></div>' +
+    '<div class="fieldLab">邮件 App 打不开 / 没反应？手动发也一样：</div>' +
+    '<div class="sheetPreview">① 复制收件人和内容　② 打开你常用的邮箱（QQ/网易/任意）' +
+    '　③ 粘贴到新邮件里发出<br><br>收件人：<b>' + esc(SUBSCRIBE_EMAIL) + "</b>" +
+    '<br>内容：<span id="diyBodyEcho" style="white-space:pre-line"></span></div>' +
+    '<div class="seg" style="margin-top:10px">' +
+    '<button type="button" id="cpAddr" data-lab="复制收件人">复制收件人</button>' +
+    '<button type="button" id="cpBody" data-lab="复制内容">复制内容</button></div>' +
+    '<div class="subHint" style="margin-top:10px">发出后约 2 分钟收到确认邮件，回显你的订阅范围</div>';
+  document.getElementById("diyStep2Sum").innerHTML = describeDiy();
+  document.getElementById("diyBodyEcho").textContent = diyBody();
+  document.getElementById("diyBack").addEventListener("click", function () {
+    document.getElementById("diyMask").dataset.built = "";
+    openDiy();
+  });
+  copyBtn("cpAddr", function () { return SUBSCRIBE_EMAIL; });
+  copyBtn("cpBody", function () { return diyBody(); });
+  /* 步骤页替换掉了选择页的 DOM，下次打开需要重建 */
+  document.getElementById("diyMask").dataset.built = "";
+}
+
+function describeDiy() {
+  var offs = diyPickedOffices();
+  var all = offs.length === DIY_OFFICES.length || offs.length === 0;
+  return "订阅范围：" + (all ? "全部办事处" : "只看 <b>" + esc(offs.join("、")) + "</b>") +
+    "，" + (diyState.mode === "on"
+      ? "只有 <b>" + esc(diyDate()) + "</b> 这一天放号才通知"
+      : "<b>" + esc(diyDate()) + "</b> 之前的名额都通知") + "。";
 }
 
 function closeDiy() {
@@ -669,8 +742,7 @@ function openDiy() {
     document.getElementById("diyCancel").addEventListener("click", closeDiy);
     document.getElementById("diyOk").addEventListener("click", function () {
       syncDiyFromWheels();   // 防抖可能还没落盘，确定那一刻以滚轮实际位置为准
-      closeDiy();
-      location.href = diyMailto();
+      showDiyStep2();
     });
     document.querySelectorAll(".seg button").forEach(function (b) {
       b.addEventListener("click", function () {
@@ -683,8 +755,11 @@ function openDiy() {
     });
 
     var chips = document.getElementById("diyChips");
+    /* 选中态从 diyState 恢复：从第二步「返回修改」会重建这块 DOM，
+       不恢复的话视觉全灰、状态却记着选择，再点一下实际是反向取消 */
     chips.innerHTML = DIY_OFFICES.map(function (o) {
-      return '<span class="chip" data-o="' + esc(o) + '">' + esc(o) + "</span>";
+      return '<span class="chip' + (diyState.offices[o] ? " on" : "") +
+        '" data-o="' + esc(o) + '">' + esc(o) + "</span>";
     }).join("");
     chips.addEventListener("click", function (e) {
       var c = e.target.closest(".chip");
@@ -699,8 +774,10 @@ function openDiy() {
   /* 默认停在「最早那个还有名额的日期」——用户开面板多半就是冲它来的。
      数据没加载出来时退回今天，绝不能因为这个便利功能把面板卡住。
      只在首次打开播种：误关重开时办事处/模式都保留，唯独日期被重播会
-     显得像 bug（用户刚滚到的那天没了） */
-  if (firstOpen) {
+     显得像 bug（用户刚滚到的那天没了）。播种标记独立于 DOM 重建标记：
+     从第二步「返回修改」会重建 DOM（firstOpen 为真），但日期必须保留 */
+  if (!diyState.seeded) {
+    diyState.seeded = true;
     var seed = (function () {
       var d = state.data;
       if (d && d.dates) {
