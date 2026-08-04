@@ -71,8 +71,8 @@ def test_realign_path_emits_no_events():
     assert ([] if realign_only else ["fake-event"]) == []
 
 
-def test_fetch_stops_early_when_data_advanced():
-    """守卫依赖 fetch 的提前收手：抓到更新的数据就不再多打请求。"""
+def test_fetch_stops_early_when_data_fresh():
+    """抓到「比现有新且距今 ≤90s」的数据就不再多打请求。"""
     calls = []
     orig = F._fetch_once
     try:
@@ -84,9 +84,33 @@ def test_fetch_stops_early_when_data_advanced():
             return next(seq)
         F._fetch_once = fake
         got = F.fetch_raw(samples=3, gap_sec=0,
-                          newer_than=F.ts_of("07/31/2026 20:46:00"))
+                          newer_than=F.ts_of("07/31/2026 20:46:00"),
+                          now_ts=F.ts_of("07/31/2026 20:55:30"))
         assert got["lastUpdateTime"] == "07/31/2026 20:55:00"
         assert len(calls) == 1
+    finally:
+        F._fetch_once = orig
+
+
+def test_fetch_keeps_sampling_when_riding_laggard_node():
+    """慢节点偏差回归：候选「比现有新」但距今太久（骑上慢 8 分钟的节点）
+    时必须继续补采，够到快节点——只比 newer_than 会让看板长期显示
+    早被抢完的号。"""
+    calls = []
+    orig = F._fetch_once
+    try:
+        seq = iter([{"lastUpdateTime": "07/31/2026 20:47:00"},   # 慢节点：比现有新但旧
+                    {"lastUpdateTime": "07/31/2026 20:54:45"}])  # 快节点：距今 15s
+
+        def fake(*_a, **_kw):
+            calls.append(1)
+            return next(seq)
+        F._fetch_once = fake
+        got = F.fetch_raw(samples=3, gap_sec=0,
+                          newer_than=F.ts_of("07/31/2026 20:46:00"),
+                          now_ts=F.ts_of("07/31/2026 20:55:00"))
+        assert got["lastUpdateTime"] == "07/31/2026 20:54:45", "必须够到快节点"
+        assert len(calls) == 2, "慢节点不该触发提前收手"
     finally:
         F._fetch_once = orig
 

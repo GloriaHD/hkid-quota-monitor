@@ -42,7 +42,7 @@ def test_picks_freshest_node():
 
 
 def test_early_exit_when_first_sample_is_new_enough():
-    """首次就抓到比现有更新的数据 -> 只打 1 个请求，不做无谓补采。"""
+    """首次就抓到「比现有新且足够新鲜」的数据 -> 只打 1 个请求。"""
     orig = F._fetch_once
     calls = []
     try:
@@ -53,7 +53,8 @@ def test_early_exit_when_first_sample_is_new_enough():
             calls.append(1)
             return next(it)
         F._fetch_once = fake
-        got = F.fetch_raw(samples=3, gap_sec=0, newer_than=_ts("07/30/2026 17:00:00"))
+        got = F.fetch_raw(samples=3, gap_sec=0, newer_than=_ts("07/30/2026 17:00:00"),
+                          now_ts=_ts("07/30/2026 17:23:00"))
         assert got["lastUpdateTime"] == "07/30/2026 17:22:43"
         assert len(calls) == 1, f"应只请求 1 次，实际 {len(calls)} 次"
     finally:
@@ -61,7 +62,7 @@ def test_early_exit_when_first_sample_is_new_enough():
 
 
 def test_stops_once_beats_stored_timestamp():
-    """补采到比现有更新的一份就收手，不必把 samples 用满。"""
+    """补采到「比现有新且足够新鲜」的一份就收手，不必把 samples 用满。"""
     orig = F._fetch_once
     calls = []
     try:
@@ -73,7 +74,8 @@ def test_stops_once_beats_stored_timestamp():
             calls.append(1)
             return next(it)
         F._fetch_once = fake
-        got = F.fetch_raw(samples=3, gap_sec=0, newer_than=_ts("07/30/2026 17:20:00"))
+        got = F.fetch_raw(samples=3, gap_sec=0, newer_than=_ts("07/30/2026 17:20:00"),
+                          now_ts=_ts("07/30/2026 17:26:00"))
         assert got["lastUpdateTime"] == "07/30/2026 17:25:00"
         assert len(calls) == 2
     finally:

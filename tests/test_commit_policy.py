@@ -30,6 +30,15 @@ def test_no_change_no_commit_unless_heartbeat():
                          heartbeat_due=True, first_run=False)
 
 
+def test_mass_gone_events_commit_immediately():
+    """抢号高峰一轮几十个 quota_gone：看板必须立即反映「号没了」，
+    攒批 3 分钟会让人盯着早被抢完的号白高兴。"""
+    assert should_commit(True, 0, since_commit_min=0.5,
+                         heartbeat_due=False, first_run=False, events_n=5)
+    assert not should_commit(True, 0, since_commit_min=0.5,
+                             heartbeat_due=False, first_run=False, events_n=4)
+
+
 def test_first_run_always_commits():
     assert should_commit(False, 0, since_commit_min=0.0,
                          heartbeat_due=False, first_run=True)

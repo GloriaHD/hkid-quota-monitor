@@ -118,9 +118,12 @@ def _write_meta(now: datetime, snap: dict, stale: bool = False,
 COMMIT_SPACING_MIN = 3.0
 
 
+MASS_EVENTS = 5
+
+
 def should_commit(content_changed: bool, notify_worthy: int,
                   since_commit_min: float, heartbeat_due: bool,
-                  first_run: bool) -> bool:
+                  first_run: bool, events_n: int = 0) -> bool:
     """本轮要不要让 CI 提交数据。1 分钟 cron 后不能每轮都提交：
     每轮提交 = 每天 1440 commit + 每分钟一次 Pages 构建（官方软限 10 次/小时），
     还会以每分钟一次的频率触发 jsDelivr 缓存清理。
@@ -133,7 +136,10 @@ def should_commit(content_changed: bool, notify_worthy: int,
         return True
     if not content_changed:
         return False
-    return notify_worthy > 0 or since_commit_min >= COMMIT_SPACING_MIN
+    # 大批量变动（含 quota_gone）也立即提交：抢号高峰「号没了」和「放号」
+    # 对看板用户同样重要，攒批 3 分钟会让人盯着早被抢完的号白高兴
+    return (notify_worthy > 0 or events_n >= MASS_EVENTS
+            or since_commit_min >= COMMIT_SPACING_MIN)
 
 
 def should_accept(prev_ts: float, new_ts: float,
@@ -246,7 +252,8 @@ def main() -> None:
                 notify_worthy=notify_worthy)
 
     commit = should_commit(content_changed, notify_worthy, since_commit,
-                           heartbeat_due, first_run=old is None)
+                           heartbeat_due, first_run=old is None,
+                           events_n=len(events))
     _set_output(commit)
     print(f"OK open_cells={open_cells} events={len(events)} "
           f"notify_worthy={notify_worthy} changed={content_changed} commit={commit}")

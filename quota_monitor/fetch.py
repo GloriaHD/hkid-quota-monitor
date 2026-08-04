@@ -72,37 +72,47 @@ def source_ts(snap: dict) -> float:
     return ts_of(snap.get("source_update_time"))
 
 
+FRESH_EXIT_SEC = 90   # 数据距今不超过这个秒数才允许提前收手
+
+
 def fetch_raw(samples: int = 3, gap_sec: float = 3.0,
-              newer_than: float = float("inf")) -> dict:
-    """取样若干次，返回 lastUpdateTime 最新的一份；一旦比 newer_than 新就提前收手。
+              newer_than: float = float("inf"),
+              now_ts: float | None = None) -> dict:
+    """取样若干次，返回 lastUpdateTime 最新的一份；抓到「足够新鲜」的才提前收手。
 
     官方接口是多节点负载均衡，各节点缓存进度不同——实测同一分钟内两个节点
     的数据可相差 9 分钟，命中各约 50%。单次取样有一半概率打到旧节点，
     表现为看板在两个状态间反复横跳、并与官方页面对不上。
 
-    newer_than 传入「我们已有数据的时间戳」：第一次就抓到更新的数据即返回
-    （只花 1 个请求），只有打到旧节点时才继续补采去找新节点——数据推进的
-    轮次因此只打 1 次请求。不传时默认 inf，即保持「采满 samples 次取最新」
-    的原语义（独立调用 python -m quota_monitor.fetch 走这条）。
-    注意提前收手的条件是「比现有新」而非「是最新的」：漏采多轮后两个节点
-    可能都比现有新，此时会锚定先打到的那个，下一轮再追上。"""
+    提前收手必须同时满足「比 newer_than 新」且「距今 ≤ FRESH_EXIT_SEC」。
+    只看前者有个隐蔽偏差：抢号高峰两节点一快一慢（如 16:27 vs 16:19）时，
+    慢节点每轮都刚好比上一轮新一点，会被立即采纳——我们就一直骑在慢 8 分钟
+    的节点上「稳步前进」，看板长期显示早被抢完的号。数据足够新鲜时仍只花
+    1 个请求；骑上慢节点时会继续补采去够快节点。
+    不传 newer_than 时默认 inf，保持「采满 samples 次取最新」的原语义。"""
+    if now_ts is None:
+        now_ts = time.time()
+
+    def good_enough(ts: float) -> bool:
+        return ts > newer_than and now_ts - ts <= FRESH_EXIT_SEC
+
     best = _fetch_once()
     parsed_any = _update_ts(best) > 0
-    if _update_ts(best) > newer_than:
+    if good_enough(_update_ts(best)):
         return best
     for _ in range(max(0, samples - 1)):
         time.sleep(gap_sec)
         try:
             # 补采是锦上添花：单独用短超时/不重试，否则一次节点抽风
-            # 就能把本轮拖过 2 分钟触发周期，形成监控空洞
+            # 就能把本轮拖过触发周期，形成监控空洞
             cand = _fetch_once(timeout=8, retries=1)
         except RuntimeError:
             break  # 已有一份可用数据，不因补采失败拖垮本轮
         parsed_any = parsed_any or _update_ts(cand) > 0
         if _update_ts(cand) > _update_ts(best):
             best = cand
-        if _update_ts(best) > newer_than:
-            break  # 已拿到比现有更新的数据，不必再打请求
+        if good_enough(_update_ts(best)):
+            break  # 已拿到足够新鲜的数据，不必再打请求
     if samples > 1 and not parsed_any:
         print("WARN lastUpdateTime 全部无法解析，多取样已退化为单取样（官方可能改了格式）")
     return best
