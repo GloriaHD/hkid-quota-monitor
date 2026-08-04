@@ -7,8 +7,8 @@
 - meta.json       抓取时间/新鲜度元信息（看板显示用）
 
 CI 集成：
-- 频率护栏：GITHUB_ACTIONS 下距上轮检查 < 1.5 分钟直接跳过
-  （2 分钟 cron 与 schedule 兜底碰撞时兜底；1.5 而非 2.0 是为吸收调度抖动）
+- 频率护栏：GITHUB_ACTIONS 下距上轮检查 < 0.75 分钟直接跳过
+  （1 分钟 cron 与 schedule 兜底碰撞时兜底；0.75 而非 1.0 是为吸收调度抖动）
 - 提交决策：内容有变 / 首轮 / 心跳超时(20min) 才让 CI 提交，
   结果写 GITHUB_OUTPUT 的 commit 变量，避免纯时间戳提交灌爆仓库
 """
@@ -27,7 +27,7 @@ from .diff import diff_snapshots
 
 HKT = timezone(timedelta(hours=8))
 DATA = Path("data")
-MIN_INTERVAL_MIN = 1.5   # 频率护栏：外部触发器抖动/重叠时的下限
+MIN_INTERVAL_MIN = 0.75  # 频率护栏：外部触发器抖动/重叠时的下限（支持 1 分钟 cron）
 HEARTBEAT_MIN = 20
 STALE_ACCEPT_MIN = 30    # 数据冻结超过此分钟数则放弃单调约束，避免永久停摆
 
