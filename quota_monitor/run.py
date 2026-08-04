@@ -81,14 +81,18 @@ def history_fresh(events: list[dict], existing_lines: list[str],
     return out
 
 
-def _append_history(events: list[dict], now: datetime) -> None:
+def _append_history(events: list[dict], now: datetime,
+                    src: str | None = None) -> None:
     hp = DATA / "history.jsonl"
     existing = hp.read_text(encoding="utf-8").splitlines() if hp.exists() else []
     fresh = history_fresh(events, existing, now)
     if fresh:
         with open(hp, "a", encoding="utf-8") as f:
             for e in fresh:
-                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+                # src=官方 lastUpdateTime：detected_at 是我们的轮询时刻，96% 落在
+                # 偶数分钟（2min 网格量化），做分钟级放号规律分析必须用官方自己的时间
+                f.write(json.dumps(dict(e, src=src) if src else e,
+                                   ensure_ascii=False) + "\n")
         print(f"history +{len(fresh)} open events")
 
 
@@ -204,7 +208,7 @@ def main() -> None:
             json.dumps(new, ensure_ascii=False, separators=(",", ":")),
             encoding="utf-8")
 
-    _append_history(events, now)
+    _append_history(events, now, new.get("source_update_time"))
 
     now_iso = now.isoformat(timespec="seconds")
     (DATA / "events.json").write_text(
