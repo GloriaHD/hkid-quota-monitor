@@ -115,6 +115,27 @@ def _write_meta(now: datetime, snap: dict, stale: bool = False,
     }, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+COMMIT_SPACING_MIN = 3.0
+
+
+def should_commit(content_changed: bool, notify_worthy: int,
+                  since_commit_min: float, heartbeat_due: bool,
+                  first_run: bool) -> bool:
+    """本轮要不要让 CI 提交数据。1 分钟 cron 后不能每轮都提交：
+    每轮提交 = 每天 1440 commit + 每分钟一次 Pages 构建（官方软限 10 次/小时），
+    还会以每分钟一次的频率触发 jsDelivr 缓存清理。
+
+    普通内容变化按 COMMIT_SPACING_MIN 间隔攒批提交（看板显示最多晚 3 分钟）。
+    但有放号事件（notify_worthy>0）必须立即提交——通知一旦发出，冷却状态
+    notify_state.json 必须随之落库，否则下一轮重新 diff 出同一批事件、
+    冷却又不在，会对订阅者重复轰炸。"""
+    if first_run or heartbeat_due:
+        return True
+    if not content_changed:
+        return False
+    return notify_worthy > 0 or since_commit_min >= COMMIT_SPACING_MIN
+
+
 def should_accept(prev_ts: float, new_ts: float,
                   frozen_min: float) -> tuple[bool, str]:
     """本轮抓到的快照要不要接受？返回 (是否接受, 原因码)。
@@ -173,15 +194,17 @@ def main() -> None:
     frozen_min = (now_src - prev_ts) / 60 if prev_ts and now_src else 0.0
     accept, why = should_accept(prev_ts, new_ts, frozen_min)
 
-    # 心跳同样适用于「本轮不更新」：否则看板的「本站检查」会停在上次数据推进
-    # 的时刻，官方冻结时会挂出「检查滞后」的假警报（其实每 2 分钟都在检查）
-    heartbeat_due = True
+    # CI 里 prev_meta 来自上次提交的 checkout，故 last_check 距今 ≈ 距上次提交
+    since_commit = float("inf")
     if prev_meta.get("last_check"):
         try:
-            heartbeat_due = (now - datetime.fromisoformat(prev_meta["last_check"])
-                             ).total_seconds() / 60 >= HEARTBEAT_MIN
+            since_commit = (now - datetime.fromisoformat(prev_meta["last_check"])
+                            ).total_seconds() / 60
         except (TypeError, ValueError):
-            heartbeat_due = True
+            pass
+    # 心跳同样适用于「本轮不更新」：否则看板的「本站检查」会停在上次数据推进
+    # 的时刻，官方冻结时会挂出「检查滞后」的假警报（其实每分钟都在检查）
+    heartbeat_due = since_commit >= HEARTBEAT_MIN
 
     if not accept:
         label = "数据未推进" if why == "same" else "抓到较旧节点"
@@ -222,9 +245,11 @@ def main() -> None:
     _write_meta(now, new, stale=False, events=len(events),
                 notify_worthy=notify_worthy)
 
-    _set_output(content_changed or heartbeat_due)
+    commit = should_commit(content_changed, notify_worthy, since_commit,
+                           heartbeat_due, first_run=old is None)
+    _set_output(commit)
     print(f"OK open_cells={open_cells} events={len(events)} "
-          f"notify_worthy={notify_worthy} changed={content_changed}")
+          f"notify_worthy={notify_worthy} changed={content_changed} commit={commit}")
 
 
 if __name__ == "__main__":

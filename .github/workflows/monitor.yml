@@ -131,6 +131,13 @@ jobs:
       - name: Purge jsDelivr cache (mainland mirror freshness)
         if: steps.commit.outputs.changed == 'true'
         run: |
-          for f in index.html config.json data/quota.json data/meta.json data/events.json; do
-            curl -sS -m 20 "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/${f}" || true
+          # purge API 有按路径的配额：1 分钟 cron 后每分钟清一次直接打满，
+          # 之后全部返回 throttled:true 且被 || true 吞掉——镜像因此冻结 6 小时。
+          # 现在每小时只在 4 个 3 分钟窗口里清（约 4 次/小时/路径），
+          # 且把响应打进日志，throttled 再出现要看得见
+          M=$((10#$(date +%M) % 15))
+          if [ "$M" -ge 3 ]; then echo "skip purge (quota window, minute=$(date +%M))"; exit 0; fi
+          for f in index.html config.json data/quota.json data/meta.json data/history.jsonl; do
+            resp=$(curl -sS -m 20 "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/${f}" || echo curl-failed)
+            echo "purge $f -> $(echo "$resp" | tr -d '\n' | head -c 160)"
           done

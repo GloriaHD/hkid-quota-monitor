@@ -295,10 +295,14 @@ var FEISHU_GROUP_URL = REPO === OWNER_REPO
 var OFFICE_SHORT = { RHK: "湾仔", RKO: "长沙湾", RTK: "将军澳", FTO: "火炭", TMO: "屯门", YLO: "元朗" };
 var OFFICE_ORDER = ["RHK", "RKO", "RTK", "FTO", "TMO", "YLO"];
 var WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
-var DATA_URLS = [
-  "data/quota.json",
-  "https://cdn.jsdelivr.net/gh/" + REPO + "@main/data/quota.json"
-];
+/* 数据源优先级：当前站点相对路径 → Pages 直连 → jsDelivr 镜像。
+   不能「谁先成功用谁」：jsDelivr 对 @main 缓存最长 12 小时，从镜像打开
+   页面时相对路径也落在镜像上，一「成功」就把 6 小时前的旧数据当真了。
+   必须探测各源 meta 的 last_check，谁新鲜用谁 */
+var _RP = REPO.split("/");
+var DATA_BASES = ["", "https://" + _RP[0] + ".github.io/" + _RP[1] + "/",
+                  "https://cdn.jsdelivr.net/gh/" + REPO + "@main/"];
+var FRESH_MS = 10 * 60000;   /* meta 比这新就不再多探测别的源 */
 /* 上游 API 字段会经 data/quota.json 流到每个访问者的浏览器，
    一律转义后再进 innerHTML（存储型 XSS 防线） */
 function esc(v) {
@@ -326,33 +330,40 @@ document.getElementById("themeBtn").onclick = function () {
 };
 
 /* ---------- 数据 ---------- */
-function fetchData(i) {
-  i = i || 0;
-  if (i >= DATA_URLS.length) { showErr("数据加载失败，请稍后刷新重试"); return; }
-  var bust = "?t=" + Math.floor(Date.now() / 30000);  // 30s 桶，跟上 2 分钟数据节奏
-  fetch(DATA_URLS[i] + bust, { cache: "no-store" })
-    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(function (d) {
-      state.data = d;
-      // meta（新鲜度）与 config（分级提醒阈值）拉不到都不影响主渲染
-      var aux = function (path) {
-        return fetch(DATA_URLS[i].replace("data/quota.json", path) + bust,
-                     { cache: "no-store" })
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .catch(function () { return null; });
-      };
-      return Promise.all([aux("data/meta.json"), aux("config.json")])
-        .then(function (res) {
-          state.meta = res[0]; state.cfg = res[1];
-          // 渲染异常必须与网络失败区分开：否则用户被引导去做无用的刷新，
-          // 而且会白白多切换一次数据源
-          try { render(); } catch (err) {
-            showErr("页面渲染异常，请刷新重试（数据已取到）");
-            if (window.console) console.error(err);
-          }
-        });
-    })
-    .catch(function () { fetchData(i + 1); });
+function fetchData() {
+  var bust = "?t=" + Math.floor(Date.now() / 30000);  // 30s 桶，跟上 1 分钟数据节奏
+  var get = function (base, path) {
+    return fetch(base + path + bust, { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; });
+  };
+  var best = null;
+  (function probe(i) {
+    if (i >= DATA_BASES.length) {
+      if (best) return loadFrom(best);
+      showErr("数据加载失败，请稍后刷新重试");
+      return;
+    }
+    get(DATA_BASES[i], "data/meta.json").then(function (m) {
+      var ts = m ? (Date.parse(m.last_check || "") || 0) : 0;
+      /* 严格更新才换源：并列时保留靠前的（相对路径最省流量） */
+      if (m && (!best || ts > best.ts)) best = { base: DATA_BASES[i], meta: m, ts: ts };
+      if (m && Date.now() - ts < FRESH_MS) return loadFrom(best);
+      probe(i + 1);   /* 这个源不够新鲜（或挂了），看看下一个 */
+    });
+  })(0);
+  function loadFrom(src) {
+    Promise.all([get(src.base, "data/quota.json"), get(src.base, "config.json")])
+      .then(function (res) {
+        if (!res[0]) { showErr("数据加载失败，请稍后刷新重试"); return; }
+        state.data = res[0]; state.meta = src.meta; state.cfg = res[1];
+        // 渲染异常必须与网络失败区分开：否则用户被引导去做无用的刷新
+        try { render(); } catch (err) {
+          showErr("页面渲染异常，请刷新重试（数据已取到）");
+          if (window.console) console.error(err);
+        }
+      });
+  }
 }
 function showErr(msg) {
   var el = document.getElementById("err");
