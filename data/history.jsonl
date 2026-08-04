@@ -683,3 +683,4 @@
 {"type": "quota_open", "office": "RTK", "date": "2026-09-21", "session": "R", "from": "r", "to": "y", "detected_at": "2026-08-04T15:38:19+08:00"}
 {"type": "quota_open", "office": "TMO", "date": "2026-08-12", "session": "R", "from": "r", "to": "y", "detected_at": "2026-08-04T15:38:19+08:00"}
 {"type": "quota_open", "office": "TMO", "date": "2026-09-07", "session": "R", "from": "r", "to": "y", "detected_at": "2026-08-04T15:38:19+08:00"}
+{"type": "quota_open", "office": "RKO", "date": "2026-08-29", "session": "R", "from": "r", "to": "g", "detected_at": "2026-08-04T16:19:17+08:00", "src": "08/04/2026 16:16:41"}
