@@ -302,6 +302,40 @@ def test_card_explains_count_mismatch():
     assert "本轮共" not in info
 
 
+def test_stray_slots_get_the_sniper_tag():
+    """散号（一轮 ≤2 格的孤立回流）是黄牛转关的失手窗口，飞书卡片、
+    纯文本兜底、邮件三条路都必须带上手快专场标记；大批量放号不带。"""
+    from quota_monitor.notify import build_email_html, is_stray
+    assert is_stray([ev()]) and is_stray([ev(), ev(office="TMO")])
+    assert not is_stray([]) and not is_stray([ev(), ev(), ev()])
+
+    import json as _j
+    tagged = _j.dumps(build_feishu_card(["x"], 1, "notice", CFG_TIERS, 1,
+                                        "湾仔 09/02", stray=True), ensure_ascii=False)
+    assert "散号回流" in tagged and "手快专场" in tagged
+    plain = _j.dumps(build_feishu_card(["x"] * 9, 9, "notice", CFG_TIERS, 9, ""),
+                     ensure_ascii=False)
+    assert "散号回流" not in plain
+
+    html_doc = build_email_html(["x"], 1, "notice", CFG_TIERS, 1, stray=True)
+    assert "散号回流" in html_doc
+    assert "散号回流" not in build_email_html(["x"] * 9, 9, "notice", CFG_TIERS, 9)
+
+    # compose 的接线：单事件邮件自动带标记
+    subj, body = compose([ev()], CFG_TIERS)
+    assert "散号回流" in body
+    _, body_mass = compose([ev(date=f"2026-09-{d:02d}") for d in range(1, 8)], CFG_TIERS)
+    assert "散号回流" not in body_mass
+
+    # send_feishu 的接线：兜底纯文本也要带
+    sent, err = _send_with_fake(
+        [11246, 0], lines=["**湾仔**：09/02(少量)"], n=1, dry=False, tier="notice",
+        cfg=CFG_TIERS, n_top=1, events=[ev(date="2026-09-02")])
+    assert err is None
+    assert "散号回流" in _j.dumps(sent[0], ensure_ascii=False)
+    assert "散号回流" in sent[1]["content"]["text"]
+
+
 def test_card_always_carries_booking_button_and_disclaimer():
     c = build_feishu_card([], 0, "info", {}, 0, "")
     import json as _j

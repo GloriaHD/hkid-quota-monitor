@@ -212,13 +212,18 @@ def compose(events: list[dict], cfg: dict) -> tuple[str, str]:
         "notice": f"🔔 香港ID放号：{cfg.get('notice_before', '近期')} 前有 {n_top} 个名额",
         "info": f"🎫 香港ID预约放号：{n_all} 个名额",
     }[tier]
-    return subject, build_email_html(lines, n_top, tier, cfg, n_all)
+    return subject, build_email_html(lines, n_top, tier, cfg, n_all,
+                                     stray=is_stray(events))
 
 
 def build_email_html(lines: list[str], n_top: int, tier: str = "info",
-                     cfg: dict | None = None, n_all: int | None = None) -> str:
+                     cfg: dict | None = None, n_all: int | None = None,
+                     stray: bool = False) -> str:
     """n_top=落在该提醒档内的名额数（标题用）；n_all=本批全部（副标题用）。"""
     items = "".join(f"<li style='margin:4px 0'>{html.escape(ln)}</li>" for ln in lines)
+    stray_html = (f"<p style='background:#fff7e0;border-radius:8px;padding:8px 10px;"
+                  f"margin:0 0 10px;color:#6b4a00;font-weight:600'>{STRAY_HINT}</p>"
+                  if stray else "")
     cfg = cfg or {}
     n_all = n_top if n_all is None else n_all
     extra = f"（本批共检出 {n_all} 个）" if n_all > n_top else ""
@@ -233,6 +238,7 @@ def build_email_html(lines: list[str], n_top: int, tier: str = "info",
     return f"""<div style="font-family:system-ui,'PingFang SC','Microsoft YaHei';max-width:560px">
 <h2 style="color:{head_color};margin:0 0 6px">{head}</h2>
 <p style="color:#666;margin:0 0 12px">香港入境处智能身份证预约（检测时间 {_now().strftime('%m-%d %H:%M')} 港时）</p>
+{stray_html}
 <ul style="padding-left:18px">{items}</ul>
 <p style="margin:16px 0">
 <a href="{BOOKING}" style="background:#0b57d0;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">立即去官方预约/改期</a>
@@ -309,6 +315,16 @@ def earliest_line(events: list[dict]) -> str:
 
 _TIER_CARD = {"urgent": ("red", "🚨"), "notice": ("orange", "🔔"),
               "info": ("blue", "🎫")}
+STRAY_MAX = 2
+STRAY_HINT = ("⚡ 散号回流：通常几分钟内消失，很可能是黄牛转关失手——"
+              "抢到就是从他们手里截胡，手快专场")
+
+
+def is_stray(events: list[dict]) -> bool:
+    """散号 = 一轮只冒出一两格的孤立回流（改期/取消释放的典型形态），
+    与「泄洪式」大批量放号相对。它们最值得扑：出现随机、几分钟内蒸发，
+    正是黄牛转关的失手窗口——民间抢到一个，他们就赔一单「包的」。"""
+    return 0 < len(events) <= STRAY_MAX
 DISCLAIMER = "第三方公益工具，非入境处官方服务 · 只做监控提醒，不代抢代约"
 
 
@@ -319,7 +335,7 @@ def _count_note(n_all: int, n_top: int, tier: str, cfg: dict) -> str:
 
 
 def build_feishu_card(lines: list[str], n_top: int, tier: str, cfg: dict,
-                      n_all: int, earliest: str = "") -> dict:
+                      n_all: int, earliest: str = "", stray: bool = False) -> dict:
     """卡片而非纯文本：群消息流里纯文本会被划过去，带色头的卡片
     一眼能分出「9月1日前的红色急件」和「普通提醒」。
 
@@ -339,6 +355,9 @@ def build_feishu_card(lines: list[str], n_top: int, tier: str, cfg: dict,
         # @所有人需群机器人开启「允许 @ 所有人」；未开启时飞书按普通文本展示，不报错
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content":
                          "<at id=all></at> 名额常在几分钟内被抢完，现在就点下面的按钮"}})
+    if stray:
+        elements.append({"tag": "div", "text": {"tag": "lark_md",
+                                                "content": f"**{STRAY_HINT}**"}})
     if earliest:
         elements.append({"tag": "div", "text": {"tag": "lark_md",
                                                 "content": f"**最早可约：{earliest}**"}})
@@ -388,7 +407,8 @@ def send_feishu(lines: list[str], n: int, dry: bool, tier: str = "info",
     cfg = cfg or {}
     n_top = n if n_top is None else n_top
     earliest = earliest_line(events or [])
-    card = build_feishu_card(lines, n_top, tier, cfg, n, earliest)
+    stray = is_stray(events or [])
+    card = build_feishu_card(lines, n_top, tier, cfg, n, earliest, stray)
     # 纯文本兜底：卡片 schema 是飞书说了算的，哪天字段改了也不能让这条通道整个哑掉。
     # 兜底必须是「同样一条消息的降级版」而非精简版——触发它的场景（飞书改了卡片
     # 字段）会是持续性的，@所有人 一旦只活在卡片里，届时紧急提醒会全部静默沉底
@@ -396,7 +416,8 @@ def send_feishu(lines: list[str], n: int, dry: bool, tier: str = "info",
     note = (f"\n（{_count_note(n, n_top, tier, cfg)}）"
             if n != n_top and tier != "info" else "")
     head = card["header"]["title"]["content"]
-    text = (at_all + (f"{head}\n最早可约：{earliest}\n" if earliest else f"{head}\n")
+    text = (at_all + (f"{STRAY_HINT}\n" if stray else "")
+            + (f"{head}\n最早可约：{earliest}\n" if earliest else f"{head}\n")
             # 去掉 lark_md 的加粗记号——纯文本消息里它会原样显示成星号
             + "\n".join(ln.replace("**", "") for ln in lines) + note +
             f"\n\n官方预约：{BOOKING}\n实时看板：{DASHBOARD}\n{DISCLAIMER}")
