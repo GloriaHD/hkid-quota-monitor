@@ -88,12 +88,13 @@ jobs:
               for f in quota.json quota_prev.json events.json meta.json; do
                 if [ -f "$MINE/$f" ]; then cp -f "$MINE/$f" "data/$f"; fi
               done
-            elif [ -f "$MINE/meta.json" ]; then
-              # 数据未推进的轮次也可能因心跳到期需要落库 meta（看板的
-              # 「本站检查」靠它，否则会停在上次数据推进的时刻误报滞后）。
-              # 只有内容真变了才会进入下面的 commit，不会平白多出提交。
-              cp -f "$MINE/meta.json" data/meta.json
             fi
+            # 注意：COMMIT_DATA=false 时【不要】把 meta.json 复制回来。
+            # meta 的 last_check 每轮都变，复制回来必然产生 commit——
+            # 曾有个 elif 无条件复制它，run.py 的提交节流因此形同虚设，
+            # 忙时照样每分钟一次提交。心跳到期的轮次 COMMIT_DATA 本来
+            # 就是 true（run.py 两个分支都把 heartbeat_due 算进输出），
+            # 走上面的正路复制，不需要旁路
             # history.jsonl 是 append-only，「最新者胜」对它是错的语义：
             # 以远端为底，只补上本轮新增的行
             if [ -f "$MINE/history.jsonl" ]; then
