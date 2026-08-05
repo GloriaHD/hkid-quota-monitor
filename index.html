@@ -300,8 +300,14 @@ var WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
    页面时相对路径也落在镜像上，一「成功」就把 6 小时前的旧数据当真了。
    必须探测各源 meta 的 last_check，谁新鲜用谁 */
 var _RP = REPO.split("/");
+/* jsDelivr 四个端点（cdn/fastly/gcore/testingcf）缓存彼此独立，实测同一时刻
+   新鲜度可差 3 小时以上（cdn 217 分钟 vs gcore 1 分钟）。purge API 配额太紧
+   靠不住，多端点探测取最新才是镜像新鲜度的正解 */
 var DATA_BASES = ["", "https://" + _RP[0] + ".github.io/" + _RP[1] + "/",
-                  "https://cdn.jsdelivr.net/gh/" + REPO + "@main/"];
+                  "https://gcore.jsdelivr.net/gh/" + REPO + "@main/",
+                  "https://testingcf.jsdelivr.net/gh/" + REPO + "@main/",
+                  "https://cdn.jsdelivr.net/gh/" + REPO + "@main/",
+                  "https://fastly.jsdelivr.net/gh/" + REPO + "@main/"];
 var FRESH_MS = 10 * 60000;   /* meta 比这新就不再多探测别的源 */
 /* 上游 API 字段会经 data/quota.json 流到每个访问者的浏览器，
    一律转义后再进 innerHTML（存储型 XSS 防线） */
@@ -900,6 +906,7 @@ function openDiy() {
 /* ---------- 蹲守小抄：放号时段统计（data/history.jsonl，本站自己攒的） ---------- */
 (function () {
   var urls = ["data/history.jsonl",
+              "https://gcore.jsdelivr.net/gh/" + REPO + "@main/data/history.jsonl",
               "https://cdn.jsdelivr.net/gh/" + REPO + "@main/data/history.jsonl"];
   function render(text) {
     var byHour = {}, total = 0;
