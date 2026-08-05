@@ -83,11 +83,19 @@ jobs:
             # 这期间别人推的代码静默回滚（CI 全绿、push 是快进，看不出异常）。
             git reset -q --hard origin/main
 
-            # 再把「本轮拥有」的文件放回去，只碰 data/ 下这几个
+            # 再把「本轮拥有」的文件放回去，只碰 data/ 下这几个。
+            # 「数据只进不退」在仓库层还得守一次：排队晚启动的轮次 checkout
+            # 的是触发时刻的旧 SHA，它的快照基线因此过期——照抄回去会把
+            # 仓库数据往回倒（实测下午源时间戳反复倒退 14:18→14:13→14:16），
+            # 看板横跳、diff 重放旧事件。本轮快照比远端旧就整批放弃
             if [ "$COMMIT_DATA" = "true" ]; then
-              for f in quota.json quota_prev.json events.json meta.json; do
-                if [ -f "$MINE/$f" ]; then cp -f "$MINE/$f" "data/$f"; fi
-              done
+              if python -c "import json,sys,os; from quota_monitor.fetch import ts_of; load=(lambda p: json.load(open(p, encoding='utf-8'))); m=load(sys.argv[1]); r=(load('data/quota.json') if os.path.exists('data/quota.json') else {}); sys.exit(0 if ts_of(m.get('source_update_time','')) >= ts_of(r.get('source_update_time','')) else 1)" "$MINE/quota.json"; then
+                for f in quota.json quota_prev.json events.json meta.json; do
+                  if [ -f "$MINE/$f" ]; then cp -f "$MINE/$f" "data/$f"; fi
+                done
+              else
+                echo "::warning::本轮快照比远端旧（过期 checkout），放弃覆盖数据文件"
+              fi
             fi
             # 注意：COMMIT_DATA=false 时【不要】把 meta.json 复制回来。
             # meta 的 last_check 每轮都变，复制回来必然产生 commit——
