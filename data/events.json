@@ -1,4 +1,14 @@
 {
- "generated_at": "2026-08-06T18:18:20+08:00",
- "events": []
+ "generated_at": "2026-08-06T18:24:19+08:00",
+ "events": [
+  {
+   "type": "quota_gone",
+   "office": "FTO",
+   "date": "2026-10-10",
+   "session": "R",
+   "from": "y",
+   "to": "r",
+   "detected_at": "2026-08-06T18:24:20+08:00"
+  }
+ ]
 }
