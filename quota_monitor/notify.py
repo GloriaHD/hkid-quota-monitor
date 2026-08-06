@@ -40,7 +40,13 @@ STATUS_TEXT = {"g": "充足", "y": "少量"}
 # fork 自部署时链接自动指向自己的仓库（CI 注入 GITHUB_REPOSITORY）
 REPO = os.environ.get("GITHUB_REPOSITORY", "chen1111-a/hkid-quota-monitor")
 _OWNER, _NAME = REPO.split("/", 1)
-DASHBOARD = f"https://{_OWNER}.github.io/{_NAME}/"
+# 主仓库的看板链接指 Cloudflare Pages：github.io 在内地移动网络时通时断，
+# 通知里的按钮点不开等于白通知。fork 没有这个部署，仍走各自的 github.io；
+# 也可用 DASHBOARD_URL 环境变量覆盖
+DASHBOARD = (os.environ.get("DASHBOARD_URL")
+             or ("https://hkid-quota-monitor.pages.dev/"
+                 if REPO == "chen1111-a/hkid-quota-monitor"
+                 else f"https://{_OWNER}.github.io/{_NAME}/"))
 BOOKING = "https://www.gov.hk/tc/residents/immigration/idcard/hkic/bookregidcard.htm"
 
 

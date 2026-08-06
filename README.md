@@ -7,10 +7,10 @@
 
 ## 看板入口
 
-- 看板：https://chen1111-a.github.io/hkid-quota-monitor/
-  （内地网络对 github.io 时通时断，打不开时请配合加速器；jsDelivr/raw 直链带 nosniff 头只会显示源码，不要当网页入口用）
+- **首选（内地直连稳定）**：https://hkid-quota-monitor.pages.dev/
+- 备用：https://chen1111-a.github.io/hkid-quota-monitor/
+  （内地网络对 github.io 时通时断；jsDelivr/raw 直链带 nosniff 头只会显示源码，不要当网页入口用）
 - 内地免翻墙的完整体验走**邮件订阅 + 飞书群**——通知链路全程国内直连，放号第一时间推到手机，看板只是辅助
-- 想要稳定的内地网页入口：可将本仓库镜像到 Gitee 并开启 Gitee Pages（需实名认证，见自部署一节）
 
 ## 它怎么工作
 

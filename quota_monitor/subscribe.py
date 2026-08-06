@@ -118,7 +118,11 @@ def describe_prefs(prefs: dict) -> str:
 # fork 自部署时链接自动指向自己的仓库（CI 注入 GITHUB_REPOSITORY）
 _REPO = os.environ.get("GITHUB_REPOSITORY", "chen1111-a/hkid-quota-monitor")
 _OWNER, _NAME = _REPO.split("/", 1)
-DASHBOARD = f"https://{_OWNER}.github.io/{_NAME}/"
+# 与 notify.DASHBOARD 同规则：主仓库指内地可达的 pages.dev
+DASHBOARD = (os.environ.get("DASHBOARD_URL")
+             or ("https://hkid-quota-monitor.pages.dev/"
+                 if _REPO == "chen1111-a/hkid-quota-monitor"
+                 else f"https://{_OWNER}.github.io/{_NAME}/"))
 
 
 _QUOTE_MARKERS = re.compile(
