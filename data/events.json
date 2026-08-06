@@ -1,4 +1,23 @@
 {
- "generated_at": "2026-08-06T23:04:34+08:00",
- "events": []
+ "generated_at": "2026-08-06T23:11:47+08:00",
+ "events": [
+  {
+   "type": "quota_open",
+   "office": "RHK",
+   "date": "2026-09-28",
+   "session": "R",
+   "from": "r",
+   "to": "y",
+   "detected_at": "2026-08-06T23:11:56+08:00"
+  },
+  {
+   "type": "quota_open",
+   "office": "TMO",
+   "date": "2026-09-28",
+   "session": "R",
+   "from": "r",
+   "to": "y",
+   "detected_at": "2026-08-06T23:11:56+08:00"
+  }
+ ]
 }
