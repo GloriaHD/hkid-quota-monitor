@@ -962,8 +962,12 @@ function openDiy() {
 })();
 
 /* ---------- 调度自证：直读 GitHub Actions 公开审计 API ---------- */
-function fetchProof() {
-  fetch("https://api.github.com/repos/" + REPO + "/actions/workflows/monitor.yml/runs?per_page=12&status=completed")
+function fetchProof(useProxy) {
+  /* 首选直连 GitHub API；失败退到 /api/runs——部署在 Cloudflare Pages 时
+     那是边缘代理（内地可达），部署在 github.io 时它 404，落最终 catch */
+  var url = useProxy ? "api/runs"
+    : "https://api.github.com/repos/" + REPO + "/actions/workflows/monitor.yml/runs?per_page=12&status=completed";
+  fetch(url)
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(function (j) {
       var runs = (j.workflow_runs || []).filter(function (r) { return r.name === "quota-monitor"; });
@@ -988,6 +992,7 @@ function fetchProof() {
       el.style.display = "flex";
     })
     .catch(function () {
+      if (!useProxy) { fetchProof(true); return; }
       // 内地网络访问 api.github.com 会失败（也可能撞上 60次/小时 限流）——
       // 最需要这块信任背书的人恰好看不到，至少要说明原因而不是静默消失
       var el = document.getElementById("proof");

@@ -89,6 +89,15 @@ cron-job.org（每2分钟）──▶ GitHub Actions
 6. （开放订阅才需要）改 `index.html` 顶部三个常量：`OWNER_REPO` 改成你的 `用户名/仓库名`，`SUBSCRIBE_EMAIL` 填收件 QQ 邮箱，`FEISHU_GROUP_URL` 填飞书群链接。
    ⚠️ 不改 `OWNER_REPO` 时订阅入口会自动隐藏（防止 fork 的用户误把订阅信发给原作者），这是有意设计
 
+## Cloudflare Pages 部署（内地稳定入口，可选）
+
+github.io 在内地移动网络时通时断。把同一个仓库再挂到 Cloudflare Pages（`*.pages.dev` 内地基本直连可达），页面和数据都有第二个门：
+
+1. 注册/登录 [dash.cloudflare.com](https://dash.cloudflare.com) → **Workers & Pages → Create → Pages → Connect to Git** → 选本仓库
+2. 构建设置全部留空（纯静态，无构建步骤），直接 **Save and Deploy**
+3. 部署完成后进入项目 **Settings → Builds & deployments → Build watch paths**，Exclude 填 `data/*`——**必须做**：本仓库每几分钟提交一次数据，不排除的话免费版每月 500 次构建一天烧光
+4. 完成。`https://项目名.pages.dev` 即第二入口：仓库里的 `functions/` 会自动生效——`/data/*` 走边缘实时代理回源 GitHub（30 秒缓存，数据不受构建频率影响），`/api/runs` 代理调度审计（内地也能看到绿勾）
+
 ## 声明
 
 - 数据来自入境处公开配额查询页同源接口，抓取频率低于官方页面自身的自动刷新强度
