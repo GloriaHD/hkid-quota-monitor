@@ -931,7 +931,9 @@ function openDiy() {
     });
     if (total < 30) return;   // 样本太少画出来是误导，攒够再显示
     var hours = [], max = 0;
-    for (var h = 8; h <= 22; h++) { hours.push(h); max = Math.max(max, byHour[h] || 0); }
+    /* 全天 24 小时：早先只画 8~22 点，凌晨批次（实测 00:01 有过成批放号）
+       被图表裁掉，群里传"凌晨几点放号"时看板反而拿不出证据 */
+    for (var h = 0; h <= 23; h++) { hours.push(h); max = Math.max(max, byHour[h] || 0); }
     var counts = hours.map(function (h) { return byHour[h] || 0; });
     var top = counts.slice().sort(function (a, b) { return b - a; })[2] || 1;
     var bars = hours.map(function (h, i) {
@@ -942,7 +944,7 @@ function openDiy() {
     }).join("");
     var xl = hours.map(function (h, i) {
       return '<i class="' + (counts[i] >= top && counts[i] > 0 ? "top" : "") + '">' +
-        (h % 2 === 0 ? h : "") + "</i>";
+        (h % 3 === 0 ? h : "") + "</i>";   /* 24 柱空间紧，刻度改 3 小时一个 */
     }).join("");
     /* 建议跟着数据走：写死的时段会跟图自相矛盾（上线 4 天，第一高峰
        已经从下午 16 点变成上午 9 点） */
