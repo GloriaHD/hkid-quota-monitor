@@ -400,15 +400,23 @@ def _post_feishu(hook: str, payload: dict) -> None:
     check_feishu_body(status, raw)
 
 
+def feishu_hooks() -> list[str]:
+    """FEISHU_WEBHOOK 支持多个群机器人：逗号/换行/空白分隔。
+    群满 500 人只能开二群，同一条提醒要同时进所有群。非 https 的一律丢弃。"""
+    raw = os.environ.get("FEISHU_WEBHOOK", "")
+    hooks = [h for h in re.split(r"[\s,]+", raw) if h]
+    bad = [h for h in hooks if not h.startswith("https://")]
+    for h in bad:
+        print(f"skip feishu hook（must be https）: {h[:24]}...")
+    return [h for h in hooks if h.startswith("https://")]
+
+
 def send_feishu(lines: list[str], n: int, dry: bool, tier: str = "info",
                 cfg: dict | None = None, n_top: int | None = None,
                 events: list[dict] | None = None) -> None:
-    hook = os.environ.get("FEISHU_WEBHOOK", "")
-    if not hook:
+    hooks = feishu_hooks()
+    if not hooks:
         print("skip feishu: no webhook")
-        return
-    if not hook.startswith("https://"):
-        print("skip feishu: webhook must be https")
         return
     cfg = cfg or {}
     n_top = n if n_top is None else n_top
@@ -428,19 +436,40 @@ def send_feishu(lines: list[str], n: int, dry: bool, tier: str = "info",
             + "\n".join(ln.replace("**", "") for ln in lines) + note +
             f"\n\n官方预约：{BOOKING}\n实时看板：{DASHBOARD}\n{DISCLAIMER}")
     if dry:
-        print(f"[DRY] feishu card:\n{json.dumps(card, ensure_ascii=False, indent=1)}")
+        print(f"[DRY] feishu card ({len(hooks)} hooks):\n"
+              f"{json.dumps(card, ensure_ascii=False, indent=1)}")
         print(f"[DRY] feishu text fallback:\n{text}")   # 兜底也要能被演练看见
         return
-    try:
-        _post_feishu(hook, {"msg_type": "interactive", "card": card})
-        print("feishu sent: card ok")
-        return
-    except FeishuError as e:
-        if e.code == 19001:
-            raise      # token/权限问题，退化重发一样被拒，白发一次还拖慢邮件
-        print(f"WARN 飞书卡片被拒（{e}），退回纯文本重发")
-    _post_feishu(hook, {"msg_type": "text", "content": {"text": text}})
-    print("feishu sent: text fallback ok")
+    # 逐群独立容错：二群的机器人挂了不能连累一群。全灭才算通道失败
+    #（main 靠通道异常决定冷却回滚——只要有一个群收到，就不该重试轰炸它）
+    ok = 0
+    last_err: Exception | None = None
+    for i, hook in enumerate(hooks, 1):
+        tag = f"hook{i}/{len(hooks)}"
+        try:
+            _post_feishu(hook, {"msg_type": "interactive", "card": card})
+            print(f"feishu sent: card ok ({tag})")
+            ok += 1
+            continue
+        except FeishuError as e:
+            last_err = e
+            if e.code == 19001:
+                # token/权限问题，退化重发一样被拒，白发一次还拖慢后面的群
+                print(f"WARN feishu {tag} token 无效（19001），跳过该群")
+                continue
+            print(f"WARN 飞书卡片被拒（{tag}: {e}），退回纯文本重发")
+        except Exception as e:  # noqa: BLE001 - 网络类异常也不许拦住下一个群
+            last_err = e
+            print(f"WARN feishu {tag} card failed: {e}")
+        try:
+            _post_feishu(hook, {"msg_type": "text", "content": {"text": text}})
+            print(f"feishu sent: text fallback ok ({tag})")
+            ok += 1
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            print(f"WARN feishu {tag} fallback failed: {e}")
+    if ok == 0:
+        raise RuntimeError(f"feishu: all {len(hooks)} hooks failed") from last_err
 
 
 def check_feishu_body(status: int, raw: str) -> None:

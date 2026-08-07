@@ -232,7 +232,7 @@ def test_send_feishu_actually_calls_the_check():
     try:
         N.send_feishu(["火炭 2026-09-08 上午"], 1, dry=False)
     except RuntimeError as e:
-        assert "19001" in str(e)
+        assert "19001" in (str(e) + str(e.__cause__))
     else:
         raise AssertionError("send_feishu 必须把返回体交给 check_feishu_body")
     finally:
@@ -394,13 +394,14 @@ def test_card_reject_falls_back_to_plain_text():
     assert "最早可约" in sent[1]["content"]["text"]
 
 
-def _send_with_fake(codes, **kw):
+def _send_with_fake(codes, _hook_env=None, **kw):
     """在桩掉 urlopen 的前提下跑一次 send_feishu，返回 (发出的 payload 列表, 异常)。"""
     import os
     from quota_monitor import notify as N
     fake, sent = _fake_feishu(codes)
     orig, hook = N.urllib.request.urlopen, os.environ.get("FEISHU_WEBHOOK")
-    os.environ["FEISHU_WEBHOOK"] = "https://open.feishu.cn/open-apis/bot/v2/hook/x"
+    os.environ["FEISHU_WEBHOOK"] = _hook_env or \
+        "https://open.feishu.cn/open-apis/bot/v2/hook/x"
     N.urllib.request.urlopen = fake
     err = None
     try:
@@ -470,7 +471,7 @@ def test_bad_token_does_not_trigger_a_wasted_second_send():
     try:
         N.send_feishu(["x"], 1, dry=False, tier="info", cfg={}, n_top=1)
     except RuntimeError as e:
-        assert "19001" in str(e)
+        assert "19001" in str(e.__cause__), "异常链上必须能看到原始错误码"
     else:
         raise AssertionError("坏 token 必须抛出")
     finally:
@@ -478,6 +479,42 @@ def test_bad_token_does_not_trigger_a_wasted_second_send():
         os.environ.pop("FEISHU_WEBHOOK", None) if hook is None \
             else os.environ.update(FEISHU_WEBHOOK=hook)
     assert len(sent) == 1, f"坏 token 只该发一次，实际 {len(sent)} 次"
+
+
+def test_multi_hook_broadcast_and_isolation():
+    """群满开二群：FEISHU_WEBHOOK 逗号/换行分隔多机器人，同一条提醒进所有群；
+    一个群的机器人挂掉不许连累另一个；全灭才算通道失败（决定冷却回滚）。"""
+    import os
+    from quota_monitor.notify import feishu_hooks
+
+    saved = os.environ.get("FEISHU_WEBHOOK")
+    os.environ["FEISHU_WEBHOOK"] = (
+        "https://open.feishu.cn/open-apis/bot/v2/hook/aaa,\n"
+        "https://open.feishu.cn/open-apis/bot/v2/hook/bbb  http://insecure/x")
+    try:
+        hooks = feishu_hooks()
+        assert len(hooks) == 2 and hooks[0].endswith("aaa") and hooks[1].endswith("bbb")
+    finally:
+        if saved is None:
+            os.environ.pop("FEISHU_WEBHOOK", None)
+        else:
+            os.environ["FEISHU_WEBHOOK"] = saved
+
+    two = "https://open.feishu.cn/h/a,https://open.feishu.cn/h/b"
+    # 两群全通：两张卡片，不抛
+    sent, err = _send_with_fake([0, 0], lines=["x"], n=1, dry=False,
+                                tier="info", cfg={}, n_top=1, _hook_env=two)
+    assert err is None and [p["msg_type"] for p in sent] == ["interactive"] * 2
+
+    # 一群 token 坏一群通：不抛（有人收到就不回滚冷却），坏群不做无谓兜底重发
+    sent, err = _send_with_fake([19001, 0], lines=["x"], n=1, dry=False,
+                                tier="info", cfg={}, n_top=1, _hook_env=two)
+    assert err is None and len(sent) == 2
+
+    # 两群全坏：必须抛，让 main 回滚冷却下一轮重试
+    sent, err = _send_with_fake([19001, 19001], lines=["x"], n=1, dry=False,
+                                tier="info", cfg={}, n_top=1, _hook_env=two)
+    assert isinstance(err, RuntimeError) and len(sent) == 2
 
 
 def test_summarize_md_only_bolds_when_asked():
