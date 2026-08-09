@@ -494,6 +494,16 @@ def test_multi_hook_broadcast_and_isolation():
     try:
         hooks = feishu_hooks()
         assert len(hooks) == 2 and hooks[0].endswith("aaa") and hooks[1].endswith("bbb")
+
+        # BOM 事故复盘：PowerShell 管道给 gh secret set 灌多行 webhook 时会在
+        # 开头塞 U+FEFF，它不算 \s，切分后粘在第一条 hook 上，1 群整整哑了一天
+        # 而线上只在 CI 日志里留一行。第一个群往往是最老最大的群，不能再哑。
+        os.environ["FEISHU_WEBHOOK"] = (
+            "﻿https://open.feishu.cn/open-apis/bot/v2/hook/aaa\n"
+            "​https://open.feishu.cn/open-apis/bot/v2/hook/bbb")
+        hooks = feishu_hooks()
+        assert len(hooks) == 2, f"脏字符不该吃掉任何一个群，实际剩 {hooks}"
+        assert hooks[0].startswith("https://") and hooks[0].endswith("aaa")
     finally:
         if saved is None:
             os.environ.pop("FEISHU_WEBHOOK", None)

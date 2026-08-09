@@ -404,7 +404,14 @@ def feishu_hooks() -> list[str]:
     """FEISHU_WEBHOOK 支持多个群机器人：逗号/换行/空白分隔。
     群满 500 人只能开二群，同一条提醒要同时进所有群。非 https 的一律丢弃。"""
     raw = os.environ.get("FEISHU_WEBHOOK", "")
-    hooks = [h for h in re.split(r"[\s,]+", raw) if h]
+    # BOM/零宽字符：把多行 webhook 存进 GitHub Secret 时，各种编辑器和
+    # PowerShell 管道都可能在开头塞一个 U+FEFF。它不属于 \s，切分后仍粘在
+    # 第一条 hook 上，startswith 判定失败 → 整个群静默掉线且只在 CI 日志里
+    # 留一行字（实测 1 群这样哑了一天）。这里直接抹掉再判。
+    # 写成转义码而非字面量：这几个字符在编辑器里不可见，写成字面量哪天被
+    # 格式化工具悄悄清掉，这道防线会无声消失
+    ZW = "\ufeff\u200b\u200e\u200f\u00a0"   # BOM/零宽空格/LRM/RLM/不断行空格
+    hooks = [h for h in (x.strip(ZW) for x in re.split(r"[\s,]+", raw)) if h]
     bad = [h for h in hooks if not h.startswith("https://")]
     for h in bad:
         print(f"skip feishu hook（must be https）: {h[:24]}...")
