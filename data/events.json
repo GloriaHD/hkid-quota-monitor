@@ -1,104 +1,14 @@
 {
- "generated_at": "2026-08-10T14:23:35+08:00",
+ "generated_at": "2026-08-10T14:27:16+08:00",
  "events": [
   {
    "type": "quota_gone",
    "office": "FTO",
-   "date": "2026-10-07",
+   "date": "2026-10-08",
    "session": "R",
    "from": "y",
    "to": "r",
-   "detected_at": "2026-08-10T14:23:37+08:00"
-  },
-  {
-   "type": "quota_gone",
-   "office": "RHK",
-   "date": "2026-10-05",
-   "session": "R",
-   "from": "y",
-   "to": "r",
-   "detected_at": "2026-08-10T14:23:37+08:00"
-  },
-  {
-   "type": "quota_gone",
-   "office": "RKO",
-   "date": "2026-10-07",
-   "session": "R",
-   "from": "y",
-   "to": "r",
-   "detected_at": "2026-08-10T14:23:37+08:00"
-  },
-  {
-   "type": "quota_gone",
-   "office": "RTK",
-   "date": "2026-09-28",
-   "session": "R",
-   "from": "y",
-   "to": "r",
-   "detected_at": "2026-08-10T14:23:37+08:00"
-  },
-  {
-   "type": "quota_gone",
-   "office": "RTK",
-   "date": "2026-09-29",
-   "session": "R",
-   "from": "y",
-   "to": "r",
-   "detected_at": "2026-08-10T14:23:37+08:00"
-  },
-  {
-   "type": "quota_gone",
-   "office": "RTK",
-   "date": "2026-09-30",
-   "session": "R",
-   "from": "y",
-   "to": "r",
-   "detected_at": "2026-08-10T14:23:37+08:00"
-  },
-  {
-   "type": "quota_gone",
-   "office": "RTK",
-   "date": "2026-10-02",
-   "session": "R",
-   "from": "y",
-   "to": "r",
-   "detected_at": "2026-08-10T14:23:37+08:00"
-  },
-  {
-   "type": "quota_gone",
-   "office": "RTK",
-   "date": "2026-10-05",
-   "session": "R",
-   "from": "y",
-   "to": "r",
-   "detected_at": "2026-08-10T14:23:37+08:00"
-  },
-  {
-   "type": "quota_gone",
-   "office": "TMO",
-   "date": "2026-10-06",
-   "session": "R",
-   "from": "y",
-   "to": "r",
-   "detected_at": "2026-08-10T14:23:37+08:00"
-  },
-  {
-   "type": "quota_gone",
-   "office": "YLO",
-   "date": "2026-09-30",
-   "session": "R",
-   "from": "y",
-   "to": "r",
-   "detected_at": "2026-08-10T14:23:37+08:00"
-  },
-  {
-   "type": "quota_gone",
-   "office": "YLO",
-   "date": "2026-10-02",
-   "session": "R",
-   "from": "y",
-   "to": "r",
-   "detected_at": "2026-08-10T14:23:37+08:00"
+   "detected_at": "2026-08-10T14:27:17+08:00"
   }
  ]
 }
