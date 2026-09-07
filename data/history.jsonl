@@ -4171,3 +4171,12 @@
 {"type": "new_date", "office": "RTK", "date": "2027-01-04", "session": "R", "from": null, "to": "g", "detected_at": "2026-09-07T02:20:02+08:00", "src": "09/07/2026 02:15:26"}
 {"type": "new_date", "office": "TMO", "date": "2027-01-04", "session": "R", "from": null, "to": "g", "detected_at": "2026-09-07T02:20:02+08:00", "src": "09/07/2026 02:15:26"}
 {"type": "new_date", "office": "YLO", "date": "2027-01-04", "session": "R", "from": null, "to": "g", "detected_at": "2026-09-07T02:20:02+08:00", "src": "09/07/2026 02:15:26"}
+{"type": "quota_open", "office": "FTO", "date": "2026-11-02", "session": "R", "from": "r", "to": "y", "detected_at": "2026-09-07T12:54:53+08:00", "src": "09/07/2026 12:50:42"}
+{"type": "quota_open", "office": "FTO", "date": "2026-11-03", "session": "R", "from": "r", "to": "y", "detected_at": "2026-09-07T12:54:53+08:00", "src": "09/07/2026 12:50:42"}
+{"type": "quota_open", "office": "RHK", "date": "2026-10-27", "session": "R", "from": "r", "to": "y", "detected_at": "2026-09-07T12:54:53+08:00", "src": "09/07/2026 12:50:42"}
+{"type": "quota_open", "office": "RHK", "date": "2026-10-28", "session": "R", "from": "r", "to": "y", "detected_at": "2026-09-07T12:54:53+08:00", "src": "09/07/2026 12:50:42"}
+{"type": "quota_open", "office": "RHK", "date": "2026-10-29", "session": "R", "from": "r", "to": "y", "detected_at": "2026-09-07T12:54:53+08:00", "src": "09/07/2026 12:50:42"}
+{"type": "quota_open", "office": "RHK", "date": "2026-10-30", "session": "R", "from": "r", "to": "y", "detected_at": "2026-09-07T12:54:53+08:00", "src": "09/07/2026 12:50:42"}
+{"type": "quota_open", "office": "RHK", "date": "2026-11-14", "session": "R", "from": "r", "to": "y", "detected_at": "2026-09-07T12:54:53+08:00", "src": "09/07/2026 12:50:42"}
+{"type": "quota_open", "office": "RTK", "date": "2026-10-28", "session": "R", "from": "r", "to": "y", "detected_at": "2026-09-07T12:54:53+08:00", "src": "09/07/2026 12:50:42"}
+{"type": "quota_open", "office": "YLO", "date": "2026-10-27", "session": "R", "from": "r", "to": "y", "detected_at": "2026-09-07T12:54:53+08:00", "src": "09/07/2026 12:50:42"}
