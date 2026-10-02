@@ -1,4 +1,14 @@
 {
- "generated_at": "2026-10-02T06:50:50+08:00",
- "events": []
+ "generated_at": "2026-10-02T10:05:20+08:00",
+ "events": [
+  {
+   "type": "quota_open",
+   "office": "RHK",
+   "date": "2026-12-19",
+   "session": "R",
+   "from": "r",
+   "to": "y",
+   "detected_at": "2026-10-02T10:05:30+08:00"
+  }
+ ]
 }
